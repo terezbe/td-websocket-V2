@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TouchDesigner WebSocket Control</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>TouchDesigner Control Panel</h1>
+            <div class="connection-status">
+                <span id="status-indicator" class="status-dot disconnected"></span>
+                <span id="status-text">Disconnected</span>
+            </div>
+        </header>
+
+        <main>
+            <!-- Connection Controls -->
+            <section class="card">
+                <h2>Connection</h2>
+                <div class="control-group">
+                    <input type="text" id="websocket-url" value="ws://localhost:9980" placeholder="WebSocket URL">
+                    <button id="connect-btn" class="btn btn-primary">Connect</button>
+                    <button id="disconnect-btn" class="btn btn-secondary" disabled>Disconnect</button>
+                </div>
+            </section>
+
+            <!-- Parameter Controls -->
+            <section class="card">
+                <h2>Parameters</h2>
+
+                <div class="control-group">
+                    <label for="slider1">Parameter 1 (0-100)</label>
+                    <input type="range" id="slider1" min="0" max="100" value="50" class="slider">
+                    <span id="slider1-value" class="value-display">50</span>
+                </div>
+
+                <div class="control-group">
+                    <label for="slider2">Parameter 2 (0-100)</label>
+                    <input type="range" id="slider2" min="0" max="100" value="50" class="slider">
+                    <span id="slider2-value" class="value-display">50</span>
+                </div>
+
+                <div class="control-group">
+                    <label for="slider3">Parameter 3 (0-100)</label>
+                    <input type="range" id="slider3" min="0" max="100" value="50" class="slider">
+                    <span id="slider3-value" class="value-display">50</span>
+                </div>
+
+                <div class="control-group">
+                    <label for="color-picker">Color</label>
+                    <input type="color" id="color-picker" value="#ff0000">
+                </div>
+
+                <div class="control-group">
+                    <button id="trigger-btn" class="btn btn-accent">Trigger Event</button>
+                    <button id="reset-btn" class="btn btn-secondary">Reset All</button>
+                </div>
+            </section>
+
+            <!-- XY Pad Controller -->
+            <section class="card">
+                <h2>XY Pad</h2>
+                <div class="xy-pad" id="xy-pad">
+                    <div class="xy-cursor" id="xy-cursor"></div>
+                </div>
+                <div class="xy-values">
+                    <span>X: <span id="xy-x">0.50</span></span>
+                    <span>Y: <span id="xy-y">0.50</span></span>
+                </div>
+            </section>
+
+            <!-- Message Log -->
+            <section class="card">
+                <h2>Message Log</h2>
+                <div class="log-controls">
+                    <button id="clear-log-btn" class="btn btn-small">Clear Log</button>
+                </div>
+                <div id="message-log" class="message-log"></div>
+            </section>
+
+            <!-- Custom Message -->
+            <section class="card">
+                <h2>Send Custom Message</h2>
+                <div class="control-group">
+                    <textarea id="custom-message" rows="4" placeholder='{"type": "custom", "data": "your message"}'></textarea>
+                    <button id="send-custom-btn" class="btn btn-primary">Send JSON</button>
+                </div>
+            </section>
+        </main>
+
+        <footer>
+            <p>WebSocket Control Interface for TouchDesigner</p>
+        </footer>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
