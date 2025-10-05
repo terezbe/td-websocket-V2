@@ -2,98 +2,80 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TouchDesigner WebSocket Control</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, user-scalable=no">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="TD Control">
+    <meta name="theme-color" content="#0a0a0f">
+
+    <!-- iOS Splash Screens -->
+    <link rel="apple-touch-icon" href="/icon-192.png">
+    <link rel="apple-touch-startup-image" href="/splash-2048x2732.png" media="(device-width: 1024px) and (device-height: 1366px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)">
+    <link rel="apple-touch-startup-image" href="/splash-1668x2388.png" media="(device-width: 834px) and (device-height: 1194px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)">
+    <link rel="apple-touch-startup-image" href="/splash-1536x2048.png" media="(device-width: 768px) and (device-height: 1024px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)">
+    <link rel="apple-touch-startup-image" href="/splash-1290x2796.png" media="(device-width: 430px) and (device-height: 932px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)">
+    <link rel="apple-touch-startup-image" href="/splash-1179x2556.png" media="(device-width: 393px) and (device-height: 852px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)">
+    <link rel="apple-touch-startup-image" href="/splash-1125x2436.png" media="(device-width: 375px) and (device-height: 812px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)">
+    <link rel="apple-touch-startup-image" href="/splash-1242x2688.png" media="(device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)">
+    <link rel="apple-touch-startup-image" href="/splash-828x1792.png" media="(device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)">
+    <link rel="apple-touch-startup-image" href="/splash-1242x2208.png" media="(device-width: 414px) and (device-height: 736px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)">
+    <link rel="apple-touch-startup-image" href="/splash-750x1334.png" media="(device-width: 375px) and (device-height: 667px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)">
+    <link rel="apple-touch-startup-image" href="/splash-640x1136.png" media="(device-width: 320px) and (device-height: 568px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)">
+    <title>TouchDesigner Control</title>
+    <link rel="manifest" href="manifest.json">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>TouchDesigner Control Panel</h1>
-            <div class="connection-status">
+    <div class="app-container">
+        <!-- Compact Header with Status -->
+        <header class="app-header">
+            <div class="status-bar">
                 <span id="status-indicator" class="status-dot disconnected"></span>
                 <span id="status-text">Disconnected</span>
+                <button id="toggle-connection-btn" class="toggle-btn">
+                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                        <path d="M5 7.5L10 12.5L15 7.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                </button>
             </div>
         </header>
 
-        <main>
-            <!-- Connection Controls -->
-            <section class="card">
-                <h2>Connection</h2>
-                <div class="control-group">
-                    <input type="text" id="websocket-url" value="ws://localhost:9980" placeholder="WebSocket URL">
-                    <button id="connect-btn" class="btn btn-primary">Connect</button>
-                    <button id="disconnect-btn" class="btn btn-secondary" disabled>Disconnect</button>
-                </div>
-            </section>
+        <!-- Connection Panel (Slide Down) -->
+        <div class="connection-panel" id="connection-panel">
+            <input type="text" id="websocket-url" value="ws://localhost:9980" placeholder="WebSocket URL">
+            <div class="connection-buttons">
+                <button id="connect-btn" class="btn btn-primary">Connect</button>
+                <button id="disconnect-btn" class="btn btn-secondary" disabled>Disconnect</button>
+            </div>
+        </div>
 
-            <!-- Parameter Controls -->
-            <section class="card">
-                <h2>Parameters</h2>
+        <!-- Tab Navigation (populated dynamically) -->
+        <nav class="tab-nav">
+            <!-- Tabs will be generated by app.js -->
+        </nav>
 
-                <div class="control-group">
-                    <label for="slider1">Parameter 1 (0-100)</label>
-                    <input type="range" id="slider1" min="0" max="100" value="50" class="slider">
-                    <span id="slider1-value" class="value-display">50</span>
-                </div>
+        <!-- Tab Content -->
+        <main class="tab-content-wrapper">
+            <!-- Page tabs will be generated dynamically -->
 
-                <div class="control-group">
-                    <label for="slider2">Parameter 2 (0-100)</label>
-                    <input type="range" id="slider2" min="0" max="100" value="50" class="slider">
-                    <span id="slider2-value" class="value-display">50</span>
-                </div>
+            <!-- ADVANCED TAB (Static) -->
+            <div class="tab-content" id="tab-advanced">
+                <div class="scrollable-content">
+                    <div class="advanced-section">
+                        <h3>Message Log</h3>
+                        <button id="clear-log-btn" class="btn btn-small">Clear</button>
+                        <div id="message-log" class="message-log"></div>
+                    </div>
 
-                <div class="control-group">
-                    <label for="slider3">Parameter 3 (0-100)</label>
-                    <input type="range" id="slider3" min="0" max="100" value="50" class="slider">
-                    <span id="slider3-value" class="value-display">50</span>
+                    <div class="advanced-section">
+                        <h3>Custom Message</h3>
+                        <textarea id="custom-message" rows="4" placeholder='{"type": "custom", "data": "message"}'></textarea>
+                        <button id="send-custom-btn" class="btn btn-primary">Send JSON</button>
+                    </div>
                 </div>
-
-                <div class="control-group">
-                    <label for="color-picker">Color</label>
-                    <input type="color" id="color-picker" value="#ff0000">
-                </div>
-
-                <div class="control-group">
-                    <button id="trigger-btn" class="btn btn-accent">Trigger Event</button>
-                    <button id="reset-btn" class="btn btn-secondary">Reset All</button>
-                </div>
-            </section>
-
-            <!-- XY Pad Controller -->
-            <section class="card">
-                <h2>XY Pad</h2>
-                <div class="xy-pad" id="xy-pad">
-                    <div class="xy-cursor" id="xy-cursor"></div>
-                </div>
-                <div class="xy-values">
-                    <span>X: <span id="xy-x">0.50</span></span>
-                    <span>Y: <span id="xy-y">0.50</span></span>
-                </div>
-            </section>
-
-            <!-- Message Log -->
-            <section class="card">
-                <h2>Message Log</h2>
-                <div class="log-controls">
-                    <button id="clear-log-btn" class="btn btn-small">Clear Log</button>
-                </div>
-                <div id="message-log" class="message-log"></div>
-            </section>
-
-            <!-- Custom Message -->
-            <section class="card">
-                <h2>Send Custom Message</h2>
-                <div class="control-group">
-                    <textarea id="custom-message" rows="4" placeholder='{"type": "custom", "data": "your message"}'></textarea>
-                    <button id="send-custom-btn" class="btn btn-primary">Send JSON</button>
-                </div>
-            </section>
+            </div>
         </main>
-
-        <footer>
-            <p>WebSocket Control Interface for TouchDesigner</p>
-        </footer>
     </div>
 
     <script src="app.js"></script>

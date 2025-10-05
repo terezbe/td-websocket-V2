@@ -1,256 +1,261 @@
-# TouchDesigner WebSocket Server
+# TouchDesigner WebSocket Control System
 
-A WebSocket server and web UI for controlling TouchDesigner projects in real-time.
+A complete system for building and controlling TouchDesigner projects from a web interface with real-time WebSocket communication.
 
 ## Features
 
-- **Real-time WebSocket Communication** - Bidirectional data exchange between web UI and TouchDesigner
-- **Modern Web Interface** - Clean, responsive control panel with dark theme
-- **Multiple Control Types**:
-  - 3 parameter sliders (0-100 range)
-  - Color picker with RGB conversion
-  - XY pad for 2D parameter control
+- **🎨 UI Builder** - Drag-and-drop interface to design custom control panels
+- **📱 Multi-Page Interface** - Organize controls into multiple pages/tabs
+- **🔌 Real-time WebSocket** - Bidirectional data exchange between browser and TouchDesigner
+- **💾 Persistent Storage** - Save UI configurations in TouchDesigner or browser
+- **🎛️ Multiple Control Types**:
+  - Sliders with custom ranges
+  - Color pickers with RGB/hex output
+  - XY pads for 2D control
   - Trigger buttons
-  - Custom JSON message sender
-- **Message Logging** - Real-time view of sent/received messages
-- **Connection Management** - Visual connection status indicator
+  - Custom JSON messaging
+- **📦 Fully Portable** - Embed entire UI in .tox file (Web Server DAT mode)
+- **🔄 Two Deployment Options** - Node.js server OR TouchDesigner Web Server DAT
 
 ## Quick Start
 
-### 1. Install Dependencies
+### Two Setup Options
 
-```bash
-npm install
+**Choose based on your needs:**
+
+#### Option 1: Web Server DAT (Recommended for .tox export)
+✅ Fully self-contained - everything embedded in .tox file
+✅ No Node.js required - works standalone
+✅ Config saved in TouchDesigner
+
+📖 **[Complete setup guide →](docs/WEBSERVER_DAT_SETUP.md)**
+
+#### Option 2: Node.js Server (Easier for development)
+✅ Fast iteration - auto-reload during development
+✅ Separate server process
+✅ Config in browser LocalStorage
+
+**Quick steps:**
+1. Install dependencies: `npm install`
+2. Start server: `npm start`
+3. Open builder: `http://localhost:9980/builder.html`
+4. Configure TouchDesigner WebSocket DAT (see [TOUCHDESIGNER_SETUP.md](docs/TOUCHDESIGNER_SETUP.md))
+
+**Note:** Both options use the same WebSocket protocol for control messages. The difference is in how files are served and where config is stored.
+
+## TouchDesigner Setup
+
+### Web Server DAT (Recommended)
+
+For a fully self-contained .tox file with embedded UI:
+
+1. **Setup Guide**: [docs/WEBSERVER_DAT_SETUP.md](docs/WEBSERVER_DAT_SETUP.md)
+2. **Callback Script**: Use `touchdesigner/webserver_complete_callbacks.py`
+   - Handles both HTTP (API) and WebSocket (control messages)
+   - Copy entire script into a Text DAT in TouchDesigner
+   - Link to Web Server DAT's "Callbacks DAT" parameter
+
+### Node.js Server + WebSocket DAT
+
+For development with fast iteration:
+
+1. **Setup Guide**: [docs/TOUCHDESIGNER_SETUP.md](docs/TOUCHDESIGNER_SETUP.md)
+2. **Callback Script**: Extract from `touchdesigner/webserver_complete_callbacks.py`
+   - Use only the WebSocket callback functions
+   - Or create your own based on examples in the guide
+
+### Required CHOPs
+
+Both setups require these Constant CHOPs in TouchDesigner:
+- `constant_params` - Slider values
+- `constant_color` - RGB color values (0-1)
+- `constant_xy` - XY pad position (0-1)
+- `trigger1` - Trigger CHOP for button pulses
+
+## How It Works
+
+### UI Builder Workflow
+
+1. **Design**: Open `builder.html` and drag controls onto pages
+2. **Configure**: Set control properties (label, CHOP name, channel, range)
+3. **Save**: Click "Save to TD" (Web Server DAT) or browser saves automatically
+4. **Deploy**: Open `index.html` to see live control interface
+
+### Message Flow
+
+```
+Browser UI → WebSocket → TouchDesigner
+   ↓                           ↓
+Controls              Update CHOP values
+(sliders, colors)     (constant_params, etc.)
 ```
 
-### 2. Start the Server
+### WebSocket Message Format
 
-```bash
-npm start
-```
-
-The server will run on `http://localhost:9980`
-
-### 3. Open Web UI
-
-Navigate to `http://localhost:9980` in your browser
-
-### 4. Configure TouchDesigner
-
-#### Option A: TouchDesigner as WebSocket Client (Recommended)
-
-1. In TouchDesigner, add a **WebSocket DAT**
-2. Set the WebSocket DAT parameters:
-   - **Network Address**: `localhost`
-   - **Network Port**: `9980`
-   - **Active**: On
-3. Add a **DAT Execute** to handle incoming messages
-4. Reference the WebSocket DAT in the DAT Execute
-
-#### Option B: Direct Server-to-Server
-
-If you prefer TouchDesigner as the WebSocket server, modify `server.js` to act as a client instead.
-
-## TouchDesigner Setup (WebSocket DAT)
-
-### Basic Callback Example
-
-Create a text DAT with the following Python callback:
-
-```python
-def onReceiveText(dat, rowIndex, message):
-    try:
-        import json
-        data = json.loads(message)
-
-        # Handle different message types
-        msgType = data.get('type', '')
-
-        if msgType == 'parameter':
-            # Update a parameter
-            name = data.get('name')
-            value = data.get('value')
-
-            # Example: control a Constant CHOP
-            op('constant1')[name] = value
-
-        elif msgType == 'color':
-            # Update color parameters
-            rgb = data.get('rgb')
-            op('constant_color')['r'] = rgb['r']
-            op('constant_color')['g'] = rgb['g']
-            op('constant_color')['b'] = rgb['b']
-
-        elif msgType == 'xy':
-            # Update XY position
-            op('constant_xy')['x'] = data.get('x')
-            op('constant_xy')['y'] = data.get('y')
-
-        elif msgType == 'trigger':
-            # Trigger an event
-            op('trigger1').par.triggerpulse.pulse()
-
-        elif msgType == 'reset':
-            # Reset all parameters
-            op('constant1')['slider1'] = 50
-            op('constant1')['slider2'] = 50
-            op('constant1')['slider3'] = 50
-
-    except Exception as e:
-        print(f"Error parsing message: {e}")
-```
-
-### Sending Data from TouchDesigner to Web UI
-
-Use a script in TouchDesigner to send data:
-
-```python
-import json
-
-# Get reference to WebSocket DAT
-ws = op('websocket1')
-
-# Create message
-message = {
-    'type': 'parameterUpdate',
-    'slider1': 75,
-    'slider2': 50,
-    'slider3': 25
-}
-
-# Send message
-ws.sendText(json.dumps(message))
-```
-
-## Message Format Reference
-
-### From Web UI to TouchDesigner
-
-#### Parameter Update
+**Parameter (Slider)**:
 ```json
 {
   "type": "parameter",
-  "name": "slider1",
-  "value": 75.5
+  "id": "speed",
+  "value": 150,
+  "chop": "constant_params",
+  "channel": 1
 }
 ```
 
-#### Color Change
+**Color**:
 ```json
 {
   "type": "color",
-  "hex": "#ff0000",
-  "rgb": {
-    "r": 1.0,
-    "g": 0.0,
-    "b": 0.0
-  }
+  "id": "main_color",
+  "hex": "#ff6b00",
+  "rgb": {"r": 1.0, "g": 0.42, "b": 0.0},
+  "chop": "constant_color"
 }
 ```
 
-#### XY Pad
+**XY Pad**:
 ```json
 {
   "type": "xy",
+  "id": "position",
   "x": 0.75,
-  "y": 0.50
+  "y": 0.50,
+  "chop": "constant_xy"
 }
 ```
 
-#### Trigger Event
-```json
-{
-  "type": "trigger",
-  "name": "mainTrigger",
-  "timestamp": 1234567890
-}
-```
-
-#### Reset All
-```json
-{
-  "type": "reset",
-  "timestamp": 1234567890
-}
-```
-
-### From TouchDesigner to Web UI
-
-#### Parameter Feedback
-```json
-{
-  "type": "parameterUpdate",
-  "slider1": 75,
-  "slider2": 50,
-  "slider3": 25
-}
-```
+📖 **[Complete API Reference →](docs/API_REFERENCE.md)** for all message types and HTTP endpoints.
 
 ## Project Structure
 
 ```
-td-websocket-server/
-├── server.js           # WebSocket server
-├── package.json        # Node.js dependencies
-├── public/             # Static web files
-│   ├── index.html      # Main UI
-│   ├── style.css       # Styling
-│   └── app.js          # Client-side WebSocket logic
-└── README.md           # This file
+td-websocket-V2/
+├── touchdesigner/                          # TouchDesigner files
+│   ├── webserver_complete_callbacks.py     # Complete callback script (HTTP + WebSocket)
+│   ├── load_vfs_files.py                   # VFS loader utility
+│   ├── td-websocket.toe                    # Example TouchDesigner project
+│   └── WebSocketControl_v2.tox             # Exportable component
+│
+├── docs/                                   # Documentation
+│   ├── WEBSERVER_DAT_SETUP.md              # Web Server DAT setup guide
+│   ├── TOUCHDESIGNER_SETUP.md              # WebSocket DAT setup guide
+│   ├── API_REFERENCE.md                    # Complete API documentation
+│   ├── UI_CONFIG_SCHEMA.md                 # UI configuration format
+│   └── BUILDER_TESTING_GUIDE.md            # Builder testing guide
+│
+├── public/                                 # Web UI files
+│   ├── index.html                          # Viewer (control interface)
+│   ├── app.js                              # Viewer logic
+│   ├── style.css                           # Viewer styles
+│   ├── builder.html                        # UI Builder
+│   ├── builder.js                          # Builder logic
+│   └── builder.css                         # Builder styles
+│
+├── server.js                               # Node.js WebSocket server
+├── package.json                            # Node.js dependencies
+├── start.bat                               # Windows launcher
+├── README.md                               # This file
+└── CLAUDE.md                               # AI assistant instructions
 ```
 
 ## Customization
 
-### Adding New Parameters
+### Using the UI Builder
 
-1. **In HTML** (`public/index.html`):
-   - Add new input elements in the Parameters section
+The easiest way to customize your interface:
 
-2. **In JavaScript** (`public/app.js`):
-   - Add event listeners
-   - Create message handlers
-   - Define message format
+1. Open `http://localhost:9980/builder.html`
+2. Add controls from the palette (sliders, colors, XY pads)
+3. Configure each control's properties:
+   - Label (display name)
+   - CHOP name (target operator)
+   - Channel index (which value to update)
+   - Min/max/default (for sliders)
+4. Organize into multiple pages/tabs
+5. Save configuration to TouchDesigner or browser
 
-3. **In TouchDesigner**:
-   - Update callback to handle new message types
-   - Map to your parameters/operators
+No code changes needed!
 
-### Changing Port
+### Advanced Customization
 
-- In `server.js`, change `PORT` constant
-- Update WebSocket URL in web UI connection field
-- Update TouchDesigner WebSocket DAT port
+For custom control types or behavior:
+
+1. **Callback Script**: Edit `touchdesigner/webserver_complete_callbacks.py`
+   - Add new message type handlers
+   - Add custom API endpoints
+   - See [API_REFERENCE.md](docs/API_REFERENCE.md) for examples
+
+2. **Web UI**: Modify `public/builder.js` and `public/app.js`
+   - Add new control types to builder palette
+   - Implement custom rendering in viewer
+
+### Port Configuration
+
+- **Node.js Server**: Edit `PORT` in `server.js`
+- **Web Server DAT**: Change port parameter on Web Server DAT
+- Update web UI connection URL accordingly
 
 ## Troubleshooting
 
-### Connection Issues
+### Web Server DAT Issues
 
-- **Firewall**: Ensure port 9980 is not blocked
-- **Server Running**: Check that `npm start` is running without errors
-- **Correct URL**: Verify `ws://localhost:9980` in the web UI
-- **TouchDesigner Active**: Ensure WebSocket DAT is set to Active
+**Config not saving:**
+- Check `ui_config` Text DAT exists in TouchDesigner
+- Verify Callbacks DAT parameter is set on Web Server DAT
+- Look at Textport (Alt+T) for Python errors
 
-### Message Not Received
+**Files not loading (404):**
+- Verify VFS parameter points to component with files
+- Re-run `touchdesigner/load_vfs_files.py` to reload VFS
+- Check file names are correct (case-sensitive)
 
-- Check message format is valid JSON
-- Verify callback is properly attached to WebSocket DAT
-- Check TouchDesigner textport for Python errors
-- Review message log in web UI
+📖 **[Complete troubleshooting guide →](docs/WEBSERVER_DAT_SETUP.md#troubleshooting)**
 
-### Performance
+### Node.js Server Issues
 
-- For high-frequency updates (>60Hz), consider throttling
-- Use binary messages for large data transfers
-- Limit message log to prevent memory issues
+**Server won't start:**
+- Run `npm install` to install dependencies
+- Check port 9980 isn't already in use
+- Try a different port in `server.js`
+
+**WebSocket not connecting:**
+- Verify server is running (`npm start`)
+- Check firewall isn't blocking port 9980
+- Ensure TouchDesigner WebSocket DAT is Active
+
+📖 **[Complete setup guide →](docs/TOUCHDESIGNER_SETUP.md)**
+
+### Control Values Not Updating
+
+**Check:**
+- Required CHOPs exist in TouchDesigner (constant_params, constant_color, constant_xy, trigger1)
+- CHOP names in UI config match actual CHOP names
+- Callbacks DAT is properly linked
+- Textport shows messages being received
+
+**Common fixes:**
+- Verify control's `chop` property matches your CHOP name
+- Check `channel` index is correct (0-based)
+- Look for Python errors in Textport
+
+## Documentation
+
+- **[Web Server DAT Setup](docs/WEBSERVER_DAT_SETUP.md)** - Self-contained .tox setup
+- **[TouchDesigner Setup](docs/TOUCHDESIGNER_SETUP.md)** - Node.js server setup
+- **[API Reference](docs/API_REFERENCE.md)** - Complete message format reference
+- **[UI Config Schema](docs/UI_CONFIG_SCHEMA.md)** - Configuration file format
+- **[Builder Testing Guide](docs/BUILDER_TESTING_GUIDE.md)** - Testing the UI builder
 
 ## Resources
 
-### Official Documentation
-- [TouchDesigner WebSocket DAT](https://docs.derivative.ca/WebSocket_DAT)
-- [TouchDesigner Web Server DAT](https://docs.derivative.ca/Web_Server_DAT)
+**TouchDesigner Documentation:**
+- [Web Server DAT](https://docs.derivative.ca/Web_Server_DAT)
+- [WebSocket DAT](https://docs.derivative.ca/WebSocket_DAT)
+- [Constant CHOP](https://docs.derivative.ca/Constant_CHOP)
 
-### Tutorials
-- [Control TouchDesigner with a Website using WebSockets](https://derivative.ca/community-post/tutorial/part-1-intro-overview-websockets-control-touchdesigner-website-vice-versa)
+**Community Tutorials:**
+- [WebSocket Control Tutorial](https://derivative.ca/community-post/tutorial/part-1-intro-overview-websockets-control-touchdesigner-website-vice-versa)
 - [WebWelder Component](https://github.com/djipco/webwelder)
 
 ## License

@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>UI Builder - TouchDesigner Control</title>
+    <link rel="stylesheet" href="builder.css">
+</head>
+<body>
+    <!-- Header Bar -->
+    <header class="header-bar">
+        <div class="header-left">
+            <h1 class="header-title">UI Builder</h1>
+        </div>
+        <div class="header-actions">
+            <button id="load-from-server-btn" class="btn btn-secondary">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M8 3v10M5 10l3 3 3-3"/>
+                    <circle cx="8" cy="2" r="1.5"/>
+                </svg>
+                Load from TD
+            </button>
+            <button id="save-to-server-btn" class="btn btn-success">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M8 13V3M5 6l3-3 3 3"/>
+                    <circle cx="8" cy="14" r="1.5"/>
+                </svg>
+                Save to TD
+            </button>
+            <button id="clear-all-btn" class="btn btn-danger">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M3 3l10 10M13 3L3 13"/>
+                </svg>
+                Clear All
+            </button>
+        </div>
+    </header>
+
+    <!-- Main Content Area -->
+    <div class="main-container">
+        <!-- Left Panel: Control Palette -->
+        <aside class="control-palette">
+            <h2 class="panel-title">Controls</h2>
+            <div class="palette-controls">
+                <button class="palette-btn" data-type="slider">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="4" y1="12" x2="20" y2="12"/>
+                        <circle cx="12" cy="12" r="3" fill="currentColor"/>
+                    </svg>
+                    <span>Slider</span>
+                </button>
+                <button class="palette-btn" data-type="color">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"/>
+                        <path d="M12 2 L12 12 L20 12"/>
+                    </svg>
+                    <span>Color</span>
+                </button>
+                <button class="palette-btn" data-type="xy">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="4" y="4" width="16" height="16" rx="2"/>
+                        <circle cx="12" cy="12" r="2" fill="currentColor"/>
+                    </svg>
+                    <span>XY Pad</span>
+                </button>
+            </div>
+
+            <div class="palette-info">
+                <h3>Quick Guide</h3>
+                <ul>
+                    <li>Click a control type to add</li>
+                    <li>Click a control to edit</li>
+                    <li>Use ↑↓ arrows to reorder</li>
+                    <li>Changes save automatically</li>
+                </ul>
+            </div>
+        </aside>
+
+        <!-- Middle Panel: Canvas (Controls List) -->
+        <section class="canvas-area">
+            <div class="canvas-header">
+                <h2 class="panel-title">Layout</h2>
+                <span class="control-count" id="control-count">0 controls</span>
+            </div>
+            <div class="controls-list" id="controls-list">
+                <div class="empty-state" id="empty-state">
+                    <svg width="64" height="64" viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="16" y="16" width="32" height="32" rx="4"/>
+                        <line x1="32" y1="24" x2="32" y2="40"/>
+                        <line x1="24" y1="32" x2="40" y2="32"/>
+                    </svg>
+                    <p>No controls yet</p>
+                    <p class="empty-hint">Click a control type on the left to get started</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Right Panel: Live Preview -->
+        <section class="preview-area">
+            <div class="preview-header">
+                <div class="preview-header-left">
+                    <h2 class="panel-title">Preview</h2>
+                    <span class="preview-hint">Live preview of your UI</span>
+                </div>
+                <select id="preview-mode" class="preview-mode-selector">
+                    <option value="mobile">📱 Mobile</option>
+                    <option value="desktop">🖥️ Desktop</option>
+                </select>
+            </div>
+            <div class="preview-container" id="preview-container">
+                <div class="preview-empty" id="preview-empty">
+                    <p>Preview will appear here</p>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <!-- Properties Sidebar (Appears when control selected) -->
+    <aside class="properties-sidebar" id="properties-sidebar">
+        <div class="properties-header">
+            <h2 class="panel-title" id="properties-title">Properties</h2>
+            <button class="close-btn" id="close-properties">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M3 3l10 10M13 3L3 13"/>
+                </svg>
+            </button>
+        </div>
+        <div class="properties-content" id="properties-content">
+            <p class="properties-hint">Select a control to edit its properties</p>
+        </div>
+    </aside>
+
+    <!-- Confirmation Modal -->
+    <div class="modal" id="confirm-modal">
+        <div class="modal-content">
+            <h3 class="modal-title">Confirm Action</h3>
+            <p class="modal-message" id="modal-message"></p>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" id="modal-cancel">Cancel</button>
+                <button class="btn btn-danger" id="modal-confirm">Confirm</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="builder.js"></script>
+</body>
+</html>

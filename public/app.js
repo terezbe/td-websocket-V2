@@ -2,33 +2,18 @@
 let ws = null;
 let isConnected = false;
 
+// UI Config
+let uiConfig = null;
+let currentPageId = null;
+
 // DOM elements
 const connectBtn = document.getElementById('connect-btn');
 const disconnectBtn = document.getElementById('disconnect-btn');
 const websocketUrlInput = document.getElementById('websocket-url');
 const statusIndicator = document.getElementById('status-indicator');
 const statusText = document.getElementById('status-text');
-
-// Sliders
-const slider1 = document.getElementById('slider1');
-const slider2 = document.getElementById('slider2');
-const slider3 = document.getElementById('slider3');
-const slider1Value = document.getElementById('slider1-value');
-const slider2Value = document.getElementById('slider2-value');
-const slider3Value = document.getElementById('slider3-value');
-
-// Color picker
-const colorPicker = document.getElementById('color-picker');
-
-// Buttons
-const triggerBtn = document.getElementById('trigger-btn');
-const resetBtn = document.getElementById('reset-btn');
-
-// XY Pad
-const xyPad = document.getElementById('xy-pad');
-const xyCursor = document.getElementById('xy-cursor');
-const xyXDisplay = document.getElementById('xy-x');
-const xyYDisplay = document.getElementById('xy-y');
+const connectionPanel = document.getElementById('connection-panel');
+const toggleConnectionBtn = document.getElementById('toggle-connection-btn');
 
 // Message log
 const messageLog = document.getElementById('message-log');
@@ -39,32 +24,501 @@ const customMessageInput = document.getElementById('custom-message');
 const sendCustomBtn = document.getElementById('send-custom-btn');
 
 // Initialize
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+    preventZoom();
+    setupIOSFixes();
+    await loadConfig(); // Wait for config to load before rendering
+    renderUI();
     setupEventListeners();
     updateConnectionUI(false);
 });
+
+// ============================================================================
+// CONFIG LOADING & MIGRATION
+// ============================================================================
+
+async function loadConfig() {
+    // Try loading from TouchDesigner server first
+    try {
+        console.log('[Viewer] Attempting to load config from TouchDesigner...');
+        const response = await fetch('/api/config');
+
+        if (response.ok) {
+            const loaded = await response.json();
+            uiConfig = migrateOldConfig(loaded);
+            currentPageId = uiConfig.pages[0].id;
+            console.log('[Viewer] ✓ Loaded config from TouchDesigner server');
+            return;
+        } else {
+            console.log('[Viewer] Server responded but no config found, trying localStorage...');
+        }
+    } catch (e) {
+        console.log('[Viewer] TouchDesigner server unavailable, using localStorage...');
+    }
+
+    // Fallback to localStorage
+    try {
+        const saved = localStorage.getItem('td_ui_config');
+        if (saved) {
+            const loaded = JSON.parse(saved);
+            uiConfig = migrateOldConfig(loaded);
+            currentPageId = uiConfig.pages[0].id;
+            console.log('[Viewer] ✓ Loaded config from browser LocalStorage');
+        } else {
+            // Use default config if none exists
+            uiConfig = getDefaultConfig();
+            currentPageId = uiConfig.pages[0].id;
+            console.log('[Viewer] No config found, using default config');
+        }
+    } catch (e) {
+        console.error('[Viewer] Failed to load config:', e);
+        uiConfig = getDefaultConfig();
+        currentPageId = uiConfig.pages[0].id;
+        console.log('[Viewer] Error loading config, using default config');
+    }
+}
+
+function migrateOldConfig(config) {
+    // If config has 'controls' property (old format), migrate to pages format
+    if (config.controls && !config.pages) {
+        return {
+            version: config.version || "1.0",
+            pages: [
+                {
+                    id: "page1",
+                    name: config.name || "Main",
+                    controls: config.controls
+                }
+            ]
+        };
+    }
+    // Already in new format
+    return config;
+}
+
+function getDefaultConfig() {
+    return {
+        version: "1.0",
+        pages: [
+            {
+                id: "page1",
+                name: "Controls",
+                controls: [
+                    {
+                        id: "slider1",
+                        type: "slider",
+                        label: "Parameter 1",
+                        chop: "constant_params",
+                        channel: 0,
+                        min: 0,
+                        max: 100,
+                        default: 50
+                    },
+                    {
+                        id: "slider2",
+                        type: "slider",
+                        label: "Parameter 2",
+                        chop: "constant_params",
+                        channel: 1,
+                        min: 0,
+                        max: 100,
+                        default: 50
+                    },
+                    {
+                        id: "slider3",
+                        type: "slider",
+                        label: "Parameter 3",
+                        chop: "constant_params",
+                        channel: 2,
+                        min: 0,
+                        max: 100,
+                        default: 50
+                    },
+                    {
+                        id: "color1",
+                        type: "color",
+                        label: "Color",
+                        chop: "constant_color",
+                        default: "#ff0000"
+                    }
+                ]
+            },
+            {
+                id: "page2",
+                name: "XY Pad",
+                controls: [
+                    {
+                        id: "xy1",
+                        type: "xy",
+                        label: "XY Position",
+                        chop: "constant_xy",
+                        default: { x: 0.5, y: 0.5 }
+                    }
+                ]
+            }
+        ]
+    };
+}
+
+// ============================================================================
+// UI RENDERING
+// ============================================================================
+
+function renderUI() {
+    renderPageTabs();
+    renderCurrentPage();
+}
+
+function renderPageTabs() {
+    const tabNav = document.querySelector('.tab-nav');
+    tabNav.innerHTML = '';
+
+    // Render page tabs from config
+    uiConfig.pages.forEach(page => {
+        const btn = document.createElement('button');
+        btn.className = 'tab-btn';
+        if (page.id === currentPageId) {
+            btn.classList.add('active');
+        }
+        btn.dataset.tab = page.id;
+        btn.textContent = page.name;
+        btn.addEventListener('click', () => switchToPage(page.id));
+        tabNav.appendChild(btn);
+    });
+
+    // Add Advanced tab (static)
+    const advancedBtn = document.createElement('button');
+    advancedBtn.className = 'tab-btn';
+    advancedBtn.dataset.tab = 'advanced';
+    advancedBtn.textContent = 'Advanced';
+    advancedBtn.addEventListener('click', () => switchToAdvanced());
+    tabNav.appendChild(advancedBtn);
+}
+
+function switchToPage(pageId) {
+    currentPageId = pageId;
+    renderCurrentPage();
+
+    // Update tab buttons
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.tab === pageId);
+    });
+}
+
+function switchToAdvanced() {
+    // Hide all page content
+    document.querySelectorAll('.tab-content[data-page]').forEach(content => {
+        content.classList.remove('active');
+    });
+
+    // Show advanced tab
+    const advancedTab = document.getElementById('tab-advanced');
+    if (advancedTab) {
+        advancedTab.classList.add('active');
+    }
+
+    // Update tab buttons
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.tab === 'advanced');
+    });
+}
+
+function renderCurrentPage() {
+    const wrapper = document.querySelector('.tab-content-wrapper');
+    const page = uiConfig.pages.find(p => p.id === currentPageId);
+    if (!page) return;
+
+    // Clear existing page tabs (not advanced tab)
+    wrapper.querySelectorAll('.tab-content[data-page]').forEach(el => el.remove());
+
+    // Create content for current page
+    const content = document.createElement('div');
+    content.className = 'tab-content active';
+    content.dataset.page = currentPageId;
+
+    const scrollable = document.createElement('div');
+    scrollable.className = 'scrollable-content';
+
+    // Render controls
+    page.controls.forEach(control => {
+        const element = createControlElement(control);
+        scrollable.appendChild(element);
+    });
+
+    content.appendChild(scrollable);
+    wrapper.insertBefore(content, document.getElementById('tab-advanced'));
+}
+
+function createControlElement(control) {
+    const group = document.createElement('div');
+    group.className = 'control-group';
+
+    if (control.type === 'slider') {
+        const label = document.createElement('label');
+        label.setAttribute('for', control.id);
+        label.textContent = control.label;
+
+        const slider = document.createElement('input');
+        slider.type = 'range';
+        slider.id = control.id;
+        slider.className = 'slider';
+        slider.min = control.min;
+        slider.max = control.max;
+        slider.value = control.default;
+
+        const valueDisplay = document.createElement('span');
+        valueDisplay.id = `${control.id}-value`;
+        valueDisplay.className = 'value-display';
+        valueDisplay.textContent = control.default;
+
+        slider.addEventListener('input', () => {
+            valueDisplay.textContent = slider.value;
+            sendMessage({
+                type: 'parameter',
+                id: control.id,
+                value: parseFloat(slider.value),
+                chop: control.chop,
+                channel: control.channel
+            });
+        });
+
+        group.appendChild(label);
+        group.appendChild(slider);
+        group.appendChild(valueDisplay);
+
+    } else if (control.type === 'color') {
+        const label = document.createElement('label');
+        label.setAttribute('for', control.id);
+        label.textContent = control.label;
+
+        const colorPicker = document.createElement('input');
+        colorPicker.type = 'color';
+        colorPicker.id = control.id;
+        colorPicker.value = control.default;
+
+        colorPicker.addEventListener('input', (e) => {
+            const rgb = hexToRgb(e.target.value);
+            sendMessage({
+                type: 'color',
+                id: control.id,
+                hex: e.target.value,
+                rgb: rgb,
+                chop: control.chop
+            });
+        });
+
+        group.appendChild(label);
+        group.appendChild(colorPicker);
+
+    } else if (control.type === 'xy') {
+        const label = document.createElement('label');
+        label.textContent = control.label;
+
+        const xyContainer = document.createElement('div');
+        xyContainer.className = 'xy-pad-container';
+
+        const xyPad = document.createElement('div');
+        xyPad.className = 'xy-pad';
+        xyPad.id = control.id;
+
+        const xyCursor = document.createElement('div');
+        xyCursor.className = 'xy-cursor';
+        xyCursor.id = `${control.id}-cursor`;
+        xyPad.appendChild(xyCursor);
+
+        const xyValues = document.createElement('div');
+        xyValues.className = 'xy-values';
+        xyValues.innerHTML = `
+            <div class="xy-value">
+                <span class="xy-label">X</span>
+                <span id="${control.id}-x" class="xy-number">${control.default.x.toFixed(2)}</span>
+            </div>
+            <div class="xy-value">
+                <span class="xy-label">Y</span>
+                <span id="${control.id}-y" class="xy-number">${control.default.y.toFixed(2)}</span>
+            </div>
+        `;
+
+        xyContainer.appendChild(xyPad);
+        xyContainer.appendChild(xyValues);
+
+        group.appendChild(label);
+        group.appendChild(xyContainer);
+
+        // Setup XY pad interaction
+        setTimeout(() => setupXYPadForControl(control), 0);
+    }
+
+    return group;
+}
+
+function setupXYPadForControl(control) {
+    const xyPad = document.getElementById(control.id);
+    const xyCursor = document.getElementById(`${control.id}-cursor`);
+    const xyXDisplay = document.getElementById(`${control.id}-x`);
+    const xyYDisplay = document.getElementById(`${control.id}-y`);
+
+    if (!xyPad) return;
+
+    let isDragging = false;
+
+    // Touch events
+    xyPad.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        isDragging = true;
+        updateXYFromEvent(e, control);
+    }, { passive: false });
+
+    xyPad.addEventListener('touchmove', (e) => {
+        e.preventDefault();
+        if (isDragging) {
+            updateXYFromEvent(e, control);
+        }
+    }, { passive: false });
+
+    xyPad.addEventListener('touchend', (e) => {
+        e.preventDefault();
+        isDragging = false;
+    }, { passive: false });
+
+    xyPad.addEventListener('touchcancel', (e) => {
+        e.preventDefault();
+        isDragging = false;
+    }, { passive: false });
+
+    // Mouse events
+    xyPad.addEventListener('mousedown', (e) => {
+        isDragging = true;
+        updateXYFromEvent(e, control);
+    });
+
+    document.addEventListener('mousemove', (e) => {
+        if (isDragging && document.getElementById(control.id) === xyPad) {
+            updateXYFromEvent(e, control);
+        }
+    });
+
+    document.addEventListener('mouseup', () => {
+        isDragging = false;
+    });
+
+    function updateXYFromEvent(e, ctrl) {
+        const rect = xyPad.getBoundingClientRect();
+        let clientX, clientY;
+
+        if (e.type.startsWith('touch')) {
+            if (e.touches.length > 0) {
+                clientX = e.touches[0].clientX;
+                clientY = e.touches[0].clientY;
+            } else {
+                return;
+            }
+        } else {
+            clientX = e.clientX;
+            clientY = e.clientY;
+        }
+
+        let x = (clientX - rect.left) / rect.width;
+        let y = 1 - ((clientY - rect.top) / rect.height);
+
+        // Clamp values
+        x = Math.max(0, Math.min(1, x));
+        y = Math.max(0, Math.min(1, y));
+
+        xyCursor.style.left = `${x * 100}%`;
+        xyCursor.style.top = `${(1 - y) * 100}%`;
+        xyXDisplay.textContent = x.toFixed(2);
+        xyYDisplay.textContent = y.toFixed(2);
+
+        sendMessage({
+            type: 'xy',
+            id: ctrl.id,
+            x: x,
+            y: y,
+            chop: ctrl.chop
+        });
+    }
+
+    // Initialize position
+    xyCursor.style.left = `${control.default.x * 100}%`;
+    xyCursor.style.top = `${(1 - control.default.y) * 100}%`;
+}
+
+// ============================================================================
+// EVENT LISTENERS (LEGACY COMPATIBILITY)
+// ============================================================================
+
+// Prevent Double-Tap and Pinch Zoom (iOS)
+function preventZoom() {
+    // Prevent double-tap zoom
+    let lastTouchEnd = 0;
+    document.addEventListener('touchend', (e) => {
+        const now = Date.now();
+        if (now - lastTouchEnd <= 300) {
+            e.preventDefault();
+        }
+        lastTouchEnd = now;
+    }, { passive: false });
+
+    // Prevent pinch zoom
+    document.addEventListener('gesturestart', (e) => {
+        e.preventDefault();
+    }, { passive: false });
+
+    document.addEventListener('gesturechange', (e) => {
+        e.preventDefault();
+    }, { passive: false });
+
+    document.addEventListener('gestureend', (e) => {
+        e.preventDefault();
+    }, { passive: false });
+
+    // Prevent pinch with touchmove
+    let initialDistance = null;
+    document.addEventListener('touchstart', (e) => {
+        if (e.touches.length >= 2) {
+            initialDistance = getDistance(e.touches[0], e.touches[1]);
+        }
+    }, { passive: true });
+
+    document.addEventListener('touchmove', (e) => {
+        if (e.touches.length >= 2) {
+            e.preventDefault();
+        }
+    }, { passive: false });
+}
+
+function getDistance(touch1, touch2) {
+    const dx = touch1.clientX - touch2.clientX;
+    const dy = touch1.clientY - touch2.clientY;
+    return Math.sqrt(dx * dx + dy * dy);
+}
+
+// iOS Specific Fixes
+function setupIOSFixes() {
+    // Prevent bounce scrolling on body
+    document.body.addEventListener('touchmove', (e) => {
+        if (e.target === document.body) {
+            e.preventDefault();
+        }
+    }, { passive: false });
+
+    // Fix 100vh on iOS
+    const setVh = () => {
+        const vh = window.innerHeight * 0.01;
+        document.documentElement.style.setProperty('--vh', `${vh}px`);
+    };
+    setVh();
+    window.addEventListener('resize', setVh);
+    window.addEventListener('orientationchange', setVh);
+}
 
 // Setup all event listeners
 function setupEventListeners() {
     // Connection controls
     connectBtn.addEventListener('click', connectWebSocket);
     disconnectBtn.addEventListener('click', disconnectWebSocket);
-
-    // Sliders
-    slider1.addEventListener('input', () => updateSliderValue(slider1, slider1Value, 'slider1'));
-    slider2.addEventListener('input', () => updateSliderValue(slider2, slider2Value, 'slider2'));
-    slider3.addEventListener('input', () => updateSliderValue(slider3, slider3Value, 'slider3'));
-
-    // Color picker
-    colorPicker.addEventListener('input', handleColorChange);
-
-    // Buttons
-    triggerBtn.addEventListener('click', handleTrigger);
-    resetBtn.addEventListener('click', handleReset);
-
-    // XY Pad
-    xyPad.addEventListener('mousedown', startXYDrag);
-    xyPad.addEventListener('touchstart', startXYDrag);
+    toggleConnectionBtn.addEventListener('click', toggleConnectionPanel);
 
     // Message log
     clearLogBtn.addEventListener('click', clearMessageLog);
@@ -134,6 +588,10 @@ function updateConnectionUI(connected) {
         connectBtn.disabled = true;
         disconnectBtn.disabled = false;
         websocketUrlInput.disabled = true;
+
+        // Auto-minimize connection panel on connect
+        connectionPanel.classList.add('minimized');
+        toggleConnectionBtn.classList.add('rotated');
     } else {
         statusIndicator.classList.remove('connected');
         statusIndicator.classList.add('disconnected');
@@ -141,30 +599,36 @@ function updateConnectionUI(connected) {
         connectBtn.disabled = false;
         disconnectBtn.disabled = true;
         websocketUrlInput.disabled = false;
+
+        // Auto-expand connection panel on disconnect
+        connectionPanel.classList.remove('minimized');
+        toggleConnectionBtn.classList.remove('rotated');
     }
+}
+
+// Toggle connection panel visibility
+function toggleConnectionPanel() {
+    connectionPanel.classList.toggle('minimized');
+    toggleConnectionBtn.classList.toggle('rotated');
 }
 
 // Send message to WebSocket
 function sendMessage(data) {
     if (!isConnected || !ws || ws.readyState !== WebSocket.OPEN) {
-        logMessage('Not connected to WebSocket', 'error');
-        return false;
+        return;
     }
 
     try {
         const message = JSON.stringify(data);
         ws.send(message);
         logMessage(`Sent: ${message}`, 'sent');
-        return true;
     } catch (error) {
         logMessage(`Send error: ${error.message}`, 'error');
-        return false;
     }
 }
 
 // Handle incoming messages from TouchDesigner
 function handleIncomingMessage(data) {
-    // Handle different message types
     switch (data.type) {
         case 'parameterUpdate':
             updateUIFromTouchDesigner(data);
@@ -180,44 +644,20 @@ function handleIncomingMessage(data) {
     }
 }
 
-// Update UI based on TouchDesigner feedback
+// Update UI based on TouchDesigner feedback (for bidirectional updates)
 function updateUIFromTouchDesigner(data) {
     if (data.slider1 !== undefined) {
         slider1.value = data.slider1;
-        slider1Value.textContent = data.slider1;
+        document.getElementById('slider1-value').textContent = data.slider1;
     }
     if (data.slider2 !== undefined) {
         slider2.value = data.slider2;
-        slider2Value.textContent = data.slider2;
+        document.getElementById('slider2-value').textContent = data.slider2;
     }
     if (data.slider3 !== undefined) {
         slider3.value = data.slider3;
-        slider3Value.textContent = data.slider3;
+        document.getElementById('slider3-value').textContent = data.slider3;
     }
-}
-
-// Slider handling
-function updateSliderValue(slider, display, name) {
-    const value = slider.value;
-    display.textContent = value;
-
-    sendMessage({
-        type: 'parameter',
-        name: name,
-        value: parseFloat(value)
-    });
-}
-
-// Color picker handling
-function handleColorChange(e) {
-    const color = e.target.value;
-    const rgb = hexToRgb(color);
-
-    sendMessage({
-        type: 'color',
-        hex: color,
-        rgb: rgb
-    });
 }
 
 function hexToRgb(hex) {
@@ -227,99 +667,6 @@ function hexToRgb(hex) {
         g: parseInt(result[2], 16) / 255,
         b: parseInt(result[3], 16) / 255
     } : null;
-}
-
-// Trigger button
-function handleTrigger() {
-    sendMessage({
-        type: 'trigger',
-        name: 'mainTrigger',
-        timestamp: Date.now()
-    });
-}
-
-// Reset button
-function handleReset() {
-    slider1.value = 50;
-    slider2.value = 50;
-    slider3.value = 50;
-    slider1Value.textContent = '50';
-    slider2Value.textContent = '50';
-    slider3Value.textContent = '50';
-    colorPicker.value = '#ff0000';
-
-    // Reset XY pad to center
-    updateXYPosition(0.5, 0.5);
-
-    sendMessage({
-        type: 'reset',
-        timestamp: Date.now()
-    });
-}
-
-// XY Pad handling
-let isDragging = false;
-
-function startXYDrag(e) {
-    isDragging = true;
-    updateXYFromEvent(e);
-
-    const moveHandler = (e) => {
-        if (isDragging) {
-            updateXYFromEvent(e);
-        }
-    };
-
-    const endHandler = () => {
-        isDragging = false;
-        document.removeEventListener('mousemove', moveHandler);
-        document.removeEventListener('mouseup', endHandler);
-        document.removeEventListener('touchmove', moveHandler);
-        document.removeEventListener('touchend', endHandler);
-    };
-
-    document.addEventListener('mousemove', moveHandler);
-    document.addEventListener('mouseup', endHandler);
-    document.addEventListener('touchmove', moveHandler);
-    document.addEventListener('touchend', endHandler);
-}
-
-function updateXYFromEvent(e) {
-    e.preventDefault();
-    const rect = xyPad.getBoundingClientRect();
-    let clientX, clientY;
-
-    if (e.type.startsWith('touch')) {
-        clientX = e.touches[0].clientX;
-        clientY = e.touches[0].clientY;
-    } else {
-        clientX = e.clientX;
-        clientY = e.clientY;
-    }
-
-    let x = (clientX - rect.left) / rect.width;
-    let y = 1 - ((clientY - rect.top) / rect.height); // Invert Y axis
-
-    // Clamp values
-    x = Math.max(0, Math.min(1, x));
-    y = Math.max(0, Math.min(1, y));
-
-    updateXYPosition(x, y);
-
-    sendMessage({
-        type: 'xy',
-        x: x,
-        y: y
-    });
-}
-
-function updateXYPosition(x, y) {
-    const rect = xyPad.getBoundingClientRect();
-    xyCursor.style.left = `${x * 100}%`;
-    xyCursor.style.top = `${(1 - y) * 100}%`; // Invert Y for display
-
-    xyXDisplay.textContent = x.toFixed(2);
-    xyYDisplay.textContent = y.toFixed(2);
 }
 
 // Message logging
@@ -359,6 +706,3 @@ function sendCustomMessage() {
         logMessage(`Invalid JSON: ${error.message}`, 'error');
     }
 }
-
-// Initialize XY pad position
-updateXYPosition(0.5, 0.5);
