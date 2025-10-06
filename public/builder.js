@@ -100,9 +100,6 @@ function initializeEventListeners() {
     document.getElementById('load-from-server-btn').addEventListener('click', loadFromServer);
     document.getElementById('clear-all-btn').addEventListener('click', showClearConfirmation);
 
-    // Properties sidebar
-    document.getElementById('close-properties').addEventListener('click', closeProperties);
-
     // Preview mode selector
     document.getElementById('preview-mode').addEventListener('change', (e) => {
         setPreviewMode(e.target.value);
@@ -216,7 +213,182 @@ function moveControl(id, direction) {
 function selectControl(id) {
     state.selectedControlId = id;
     renderControlsList(); // Update selection visual
-    showProperties(id);
+}
+
+function enterEditMode(id) {
+    // Find the control item
+    const items = document.querySelectorAll('.control-item');
+    items.forEach(item => {
+        if (item.dataset.controlId === id) {
+            item.classList.add('editing');
+            item.draggable = false; // Disable drag in edit mode
+            // Focus first input
+            const firstInput = item.querySelector('.control-edit-input');
+            if (firstInput) firstInput.focus();
+        } else {
+            item.classList.remove('editing');
+            item.draggable = true; // Ensure others are draggable
+        }
+    });
+}
+
+function saveInlineEdit(id) {
+    const control = getCurrentControls().find(c => c.id === id);
+    if (!control) return;
+
+    // Find the control item
+    const item = document.querySelector(`[data-control-id="${id}"]`);
+    if (!item) return;
+
+    // Get all input fields
+    const inputs = item.querySelectorAll('.control-edit-input');
+    inputs.forEach(input => {
+        const field = input.dataset.field;
+        const value = input.type === 'number' ? parseFloat(input.value) :
+                      input.type === 'color' ? input.value :
+                      input.tagName === 'SELECT' ? parseInt(input.value) :
+                      input.value;
+
+        // Handle nested fields (like default.x)
+        if (field.includes('.')) {
+            const parts = field.split('.');
+            control[parts[0]][parts[1]] = value;
+        } else {
+            control[field] = value;
+        }
+    });
+
+    // Exit edit mode
+    item.classList.remove('editing');
+    item.draggable = true; // Re-enable drag
+
+    // Save and re-render
+    saveToLocalStorage();
+    renderControlsList();
+    renderPreview();
+}
+
+function cancelInlineEdit(id) {
+    const item = document.querySelector(`[data-control-id="${id}"]`);
+    if (item) {
+        item.classList.remove('editing');
+        item.draggable = true; // Re-enable drag
+    }
+}
+
+// ============================================================================
+// DRAG & DROP HANDLERS
+// ============================================================================
+
+let draggedControlId = null;
+
+function handleDragStart(e) {
+    draggedControlId = e.currentTarget.dataset.controlId;
+    e.currentTarget.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/html', e.currentTarget.innerHTML);
+}
+
+function handleDragOver(e) {
+    if (e.preventDefault) {
+        e.preventDefault(); // Allows drop
+    }
+    e.dataTransfer.dropEffect = 'move';
+
+    const target = e.currentTarget;
+    if (target.dataset.controlId === draggedControlId) {
+        return false; // Don't highlight self
+    }
+
+    // Calculate if cursor is in top or bottom half (continuous feedback)
+    const rect = target.getBoundingClientRect();
+    const midpoint = rect.top + rect.height / 2;
+    const isTopHalf = e.clientY < midpoint;
+
+    // Remove all drag-over classes first
+    document.querySelectorAll('.control-item').forEach(item => {
+        item.classList.remove('drag-over-top', 'drag-over-bottom');
+    });
+
+    // Add appropriate class
+    if (isTopHalf) {
+        target.classList.add('drag-over-top');
+    } else {
+        target.classList.add('drag-over-bottom');
+    }
+
+    return false;
+}
+
+function handleDragEnter(e) {
+    // Now just used for initial hover - dragover handles continuous feedback
+    e.preventDefault();
+}
+
+function handleDragLeave(e) {
+    e.currentTarget.classList.remove('drag-over-top', 'drag-over-bottom');
+}
+
+function handleDrop(e) {
+    if (e.stopPropagation) {
+        e.stopPropagation(); // Stops browser redirect
+    }
+
+    const targetControlId = e.currentTarget.dataset.controlId;
+
+    if (draggedControlId === targetControlId) {
+        return false;
+    }
+
+    // Calculate drop position (above or below target)
+    const rect = e.currentTarget.getBoundingClientRect();
+    const midpoint = rect.top + rect.height / 2;
+    const dropBelow = e.clientY >= midpoint;
+
+    // Reorder the controls
+    reorderControl(draggedControlId, targetControlId, dropBelow);
+
+    return false;
+}
+
+function handleDragEnd(e) {
+    e.currentTarget.classList.remove('dragging');
+
+    // Remove all drag-over indicators
+    document.querySelectorAll('.control-item').forEach(item => {
+        item.classList.remove('drag-over-top', 'drag-over-bottom');
+    });
+
+    draggedControlId = null;
+}
+
+function reorderControl(draggedId, targetId, dropBelow) {
+    const controls = getCurrentControls();
+
+    // Find indices
+    const draggedIndex = controls.findIndex(c => c.id === draggedId);
+    const targetIndex = controls.findIndex(c => c.id === targetId);
+
+    if (draggedIndex === -1 || targetIndex === -1) return;
+
+    // Remove dragged control
+    const [draggedControl] = controls.splice(draggedIndex, 1);
+
+    // Calculate new index (account for removal shifting indices)
+    let newIndex = targetIndex;
+    if (draggedIndex < targetIndex) {
+        newIndex = dropBelow ? targetIndex : targetIndex - 1;
+    } else {
+        newIndex = dropBelow ? targetIndex + 1 : targetIndex;
+    }
+
+    // Insert at new position
+    controls.splice(newIndex, 0, draggedControl);
+
+    // Save and re-render
+    saveToLocalStorage();
+    renderControlsList();
+    renderPreview();
 }
 
 // ============================================================================
@@ -252,6 +424,10 @@ function createControlListItem(control, index) {
         item.classList.add('selected');
     }
 
+    // Make item draggable
+    item.draggable = true;
+    item.dataset.controlId = control.id;
+
     const typeIcons = {
         slider: '<line x1="4" y1="12" x2="20" y2="12"/><circle cx="12" cy="12" r="3" fill="currentColor"/>',
         color: '<circle cx="12" cy="12" r="10"/><path d="M12 2 L12 12 L20 12"/>',
@@ -260,49 +436,123 @@ function createControlListItem(control, index) {
     };
 
     const metaText = control.type === 'slider'
-        ? `${control.chop}[${control.channel}] • ${control.min}-${control.max}`
-        : `${control.chop}`;
+        ? `Range: ${control.min}-${control.max} • Default: ${control.default}`
+        : control.type === 'color' ? `Color Picker • ${control.default}`
+        : control.type === 'xy' ? `XY Pad • (${control.default.x}, ${control.default.y})`
+        : control.type === 'button' ? `Button • ${control.default === 1 ? 'ON' : 'OFF'}`
+        : '';
 
     const controls = getCurrentControls();
 
-    item.innerHTML = `
-        <div class="control-item-header">
-            <div class="control-icon">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    ${typeIcons[control.type]}
-                </svg>
-            </div>
-            <div class="control-info">
-                <div class="control-label">${control.label}</div>
-                <div class="control-meta">${metaText}</div>
-            </div>
-        </div>
-        <div class="control-actions">
-            <div class="control-order-btns">
-                <button class="btn-icon btn-up" ${index === 0 ? 'disabled' : ''} title="Move up">
-                    <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
-                        <path d="M6 3L2 7h8z"/>
-                    </svg>
-                </button>
-                <button class="btn-icon btn-down" ${index === controls.length - 1 ? 'disabled' : ''} title="Move down">
-                    <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
-                        <path d="M6 9L2 5h8z"/>
-                    </svg>
-                </button>
-            </div>
-            <button class="btn-icon btn-delete" title="Delete">
-                <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
-                    <path d="M2 2l8 8M10 2l-8 8"/>
-                </svg>
-            </button>
+    // Create edit mode HTML based on control type
+    let editHTML = `
+        <div class="control-edit-row">
+            <span class="control-edit-label">Label</span>
+            <input type="text" class="control-edit-input" data-field="label" value="${control.label}">
         </div>
     `;
 
-    // Event listeners
-    item.addEventListener('click', (e) => {
-        if (!e.target.closest('button')) {
-            selectControl(control.id);
-        }
+    if (control.type === 'slider') {
+        editHTML += `
+            <div class="control-edit-row">
+                <span class="control-edit-label">Min</span>
+                <input type="number" class="control-edit-input control-edit-input-small" data-field="min" value="${control.min}">
+                <span class="control-edit-label">Max</span>
+                <input type="number" class="control-edit-input control-edit-input-small" data-field="max" value="${control.max}">
+                <span class="control-edit-label">Default</span>
+                <input type="number" class="control-edit-input control-edit-input-small" data-field="default" value="${control.default}">
+            </div>
+        `;
+    } else if (control.type === 'color') {
+        editHTML += `
+            <div class="control-edit-row">
+                <span class="control-edit-label">Default</span>
+                <input type="color" class="control-edit-input" data-field="default" value="${control.default}">
+            </div>
+        `;
+    } else if (control.type === 'xy') {
+        editHTML += `
+            <div class="control-edit-row">
+                <span class="control-edit-label">X</span>
+                <input type="number" class="control-edit-input control-edit-input-small" data-field="default.x" value="${control.default.x}" min="0" max="1" step="0.01">
+                <span class="control-edit-label">Y</span>
+                <input type="number" class="control-edit-input control-edit-input-small" data-field="default.y" value="${control.default.y}" min="0" max="1" step="0.01">
+            </div>
+        `;
+    } else if (control.type === 'button') {
+        editHTML += `
+            <div class="control-edit-row">
+                <span class="control-edit-label">Default</span>
+                <select class="control-edit-input control-edit-input-small" data-field="default">
+                    <option value="0" ${control.default === 0 ? 'selected' : ''}>OFF</option>
+                    <option value="1" ${control.default === 1 ? 'selected' : ''}>ON</option>
+                </select>
+            </div>
+        `;
+    }
+
+    item.innerHTML = `
+        <!-- VIEW MODE -->
+        <div class="control-item-view">
+            <div class="control-item-header">
+                <div class="control-icon">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        ${typeIcons[control.type]}
+                    </svg>
+                </div>
+                <div class="control-info">
+                    <div class="control-label">${control.label}</div>
+                    <div class="control-meta">${metaText}</div>
+                </div>
+            </div>
+            <div class="control-actions">
+                <button class="btn-icon btn-edit" title="Edit">
+                    <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+                        <path d="M0 9.5L0 12L2.5 12L9.87 4.63L7.37 2.13L0 9.5ZM11.71 2.79C12.1 2.4 12.1 1.77 11.71 1.38L10.62 0.29C10.23 -0.1 9.6 -0.1 9.21 0.29L8.38 1.12L10.88 3.62L11.71 2.79Z"/>
+                    </svg>
+                </button>
+                <div class="control-order-btns">
+                    <button class="btn-icon btn-up" ${index === 0 ? 'disabled' : ''} title="Move up">
+                        <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+                            <path d="M6 3L2 7h8z"/>
+                        </svg>
+                    </button>
+                    <button class="btn-icon btn-down" ${index === controls.length - 1 ? 'disabled' : ''} title="Move down">
+                        <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+                            <path d="M6 9L2 5h8z"/>
+                        </svg>
+                    </button>
+                </div>
+                <button class="btn-icon btn-delete" title="Delete">
+                    <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+                        <path d="M2 2l8 8M10 2l-8 8"/>
+                    </svg>
+                </button>
+            </div>
+        </div>
+
+        <!-- EDIT MODE -->
+        <div class="control-item-edit">
+            ${editHTML}
+            <div class="control-edit-actions">
+                <button class="btn-icon btn-save" title="Save">
+                    <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+                        <path d="M4 8L0 4L1.5 2.5L4 5L10.5 0L12 1.5L4 8Z"/>
+                    </svg>
+                </button>
+                <button class="btn-icon btn-cancel" title="Cancel">
+                    <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+                        <path d="M2 2l8 8M10 2l-8 8"/>
+                    </svg>
+                </button>
+            </div>
+        </div>
+    `;
+
+    // Event listeners for VIEW mode
+    item.querySelector('.btn-edit').addEventListener('click', (e) => {
+        e.stopPropagation();
+        enterEditMode(control.id);
     });
 
     item.querySelector('.btn-up')?.addEventListener('click', (e) => {
@@ -319,6 +569,39 @@ function createControlListItem(control, index) {
         e.stopPropagation();
         showDeleteConfirmation(control.id);
     });
+
+    // Event listeners for EDIT mode
+    item.querySelector('.btn-save').addEventListener('click', (e) => {
+        e.stopPropagation();
+        saveInlineEdit(control.id);
+    });
+
+    item.querySelector('.btn-cancel').addEventListener('click', (e) => {
+        e.stopPropagation();
+        cancelInlineEdit(control.id);
+    });
+
+    // Keyboard shortcuts for EDIT mode
+    const editInputs = item.querySelectorAll('.control-edit-input');
+    editInputs.forEach(input => {
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                saveInlineEdit(control.id);
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                cancelInlineEdit(control.id);
+            }
+        });
+    });
+
+    // Drag & Drop event listeners
+    item.addEventListener('dragstart', handleDragStart);
+    item.addEventListener('dragover', handleDragOver);
+    item.addEventListener('dragenter', handleDragEnter);
+    item.addEventListener('dragleave', handleDragLeave);
+    item.addEventListener('drop', handleDrop);
+    item.addEventListener('dragend', handleDragEnd);
 
     return item;
 }
@@ -422,20 +705,60 @@ function showProperties(id) {
     const control = getCurrentControls().find(c => c.id === id);
     if (!control) return;
 
-    const sidebar = document.getElementById('properties-sidebar');
-    const content = document.getElementById('properties-content');
-    const title = document.getElementById('properties-title');
+    // Remove any existing inline properties first
+    closeProperties();
 
-    title.textContent = `Edit ${control.type.charAt(0).toUpperCase() + control.type.slice(1)}`;
+    // Find the selected control item in DOM
+    const controlItems = document.querySelectorAll('.control-item');
+    let selectedItem = null;
+    controlItems.forEach(item => {
+        if (item.dataset.controlId === id) {
+            selectedItem = item;
+        }
+    });
 
-    content.innerHTML = createPropertiesForm(control);
+    if (!selectedItem) return;
+
+    // Create inline properties panel
+    const propertiesPanel = document.createElement('div');
+    propertiesPanel.className = 'control-item-properties';
+    propertiesPanel.id = 'inline-properties';
+
+    const title = control.type.charAt(0).toUpperCase() + control.type.slice(1);
+
+    propertiesPanel.innerHTML = `
+        <div class="properties-inline-header">
+            <h3 class="properties-inline-title">Edit ${title}</h3>
+            <button class="btn-icon" id="close-properties-inline" title="Close">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+                    <path d="M2 2l8 8M10 2l-8 8"/>
+                </svg>
+            </button>
+        </div>
+        ${createPropertiesForm(control)}
+    `;
+
+    // Insert after selected control item
+    selectedItem.insertAdjacentElement('afterend', propertiesPanel);
+
+    // Trigger reflow for animation
+    propertiesPanel.offsetHeight;
+
+    // Open with animation
+    setTimeout(() => {
+        propertiesPanel.classList.add('open');
+    }, 10);
 
     // Event listeners for form
-    const form = content.querySelector('.prop-form');
+    const form = propertiesPanel.querySelector('.prop-form');
     form.querySelector('#save-btn').addEventListener('click', () => saveProperties(id));
     form.querySelector('#delete-btn').addEventListener('click', () => showDeleteConfirmation(id));
+    propertiesPanel.querySelector('#close-properties-inline').addEventListener('click', closeProperties);
 
-    sidebar.classList.add('open');
+    // Scroll into view if needed
+    setTimeout(() => {
+        propertiesPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }, 300);
 }
 
 function createPropertiesForm(control) {
@@ -533,7 +856,19 @@ function saveProperties(id) {
 }
 
 function closeProperties() {
-    document.getElementById('properties-sidebar').classList.remove('open');
+    const inlineProps = document.getElementById('inline-properties');
+    if (inlineProps) {
+        // Collapse animation
+        inlineProps.classList.remove('open');
+
+        // Remove from DOM after animation
+        setTimeout(() => {
+            if (inlineProps.parentNode) {
+                inlineProps.remove();
+            }
+        }, 300);
+    }
+
     state.selectedControlId = null;
     renderControlsList(); // Update selection visual
 }

@@ -257,7 +257,7 @@ body {
     border-radius: 8px;
     padding: 16px;
     margin-bottom: 12px;
-    cursor: pointer;
+    cursor: move;
     transition: all 0.2s;
 }
 
@@ -269,6 +269,60 @@ body {
 .control-item.selected {
     border-color: var(--accent-primary);
     background: var(--bg-tertiary);
+}
+
+/* Drag & Drop Visual Feedback */
+.control-item.dragging {
+    opacity: 0.4;
+    cursor: move;
+    transform: rotate(2deg) scale(0.98);
+}
+
+.control-item.drag-over-top {
+    position: relative;
+    margin-top: 18px;
+}
+
+.control-item.drag-over-top::before {
+    content: '';
+    position: absolute;
+    top: -15px;
+    left: 0;
+    right: 0;
+    height: 6px;
+    background: var(--accent-primary);
+    border-radius: 3px;
+    box-shadow: 0 0 12px var(--accent-primary);
+    animation: pulse-line 0.8s ease-in-out infinite;
+}
+
+.control-item.drag-over-bottom {
+    position: relative;
+    margin-bottom: 18px;
+}
+
+.control-item.drag-over-bottom::after {
+    content: '';
+    position: absolute;
+    bottom: -15px;
+    left: 0;
+    right: 0;
+    height: 6px;
+    background: var(--accent-primary);
+    border-radius: 3px;
+    box-shadow: 0 0 12px var(--accent-primary);
+    animation: pulse-line 0.8s ease-in-out infinite;
+}
+
+@keyframes pulse-line {
+    0%, 100% {
+        opacity: 1;
+        transform: scaleY(1);
+    }
+    50% {
+        opacity: 0.7;
+        transform: scaleY(1.2);
+    }
 }
 
 .control-item-header {
@@ -340,6 +394,16 @@ body {
 .btn-icon:disabled {
     opacity: 0.3;
     cursor: not-allowed;
+}
+
+.btn-icon.btn-delete {
+    color: var(--danger);
+    border-color: var(--danger);
+}
+
+.btn-icon.btn-delete:hover {
+    background: var(--danger);
+    color: white;
 }
 
 /* === PREVIEW AREA (Right Panel) === */
@@ -509,59 +573,70 @@ body {
     pointer-events: none;
 }
 
-/* === PROPERTIES SIDEBAR === */
-.properties-sidebar {
-    position: fixed;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    background: var(--bg-secondary);
-    border-top: 1px solid var(--border-color);
-    max-height: 400px;
-    transform: translateY(100%);
-    transition: transform 0.3s;
-    z-index: 100;
-    display: flex;
-    flex-direction: column;
+/* === INLINE EDIT MODE === */
+.control-item-view {
+    display: block;
 }
 
-.properties-sidebar.open {
-    transform: translateY(0);
+.control-item-edit {
+    display: none;
 }
 
-.properties-header {
-    padding: 16px 20px;
-    border-bottom: 1px solid var(--border-color);
+.control-item.editing .control-item-view {
+    display: none;
+}
+
+.control-item.editing .control-item-edit {
+    display: block;
+}
+
+.control-item.editing {
+    background: var(--bg-tertiary);
+}
+
+/* Edit Mode Content */
+.control-edit-row {
     display: flex;
-    justify-content: space-between;
+    gap: 8px;
     align-items: center;
-    flex-shrink: 0;
+    margin-bottom: 8px;
 }
 
-.close-btn {
-    background: none;
-    border: none;
+.control-edit-row:last-child {
+    margin-bottom: 0;
+}
+
+.control-edit-label {
+    font-size: 11px;
     color: var(--text-secondary);
-    cursor: pointer;
-    padding: 4px;
-    transition: color 0.2s;
+    min-width: 45px;
+    font-weight: 600;
 }
 
-.close-btn:hover {
-    color: var(--text-primary);
-}
-
-.properties-content {
-    padding: 20px;
-    overflow-y: auto;
+.control-edit-input {
     flex: 1;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    padding: 6px 8px;
+    border-radius: 4px;
+    font-size: 13px;
 }
 
-.properties-hint {
-    color: var(--text-hint);
-    font-size: 14px;
-    text-align: center;
-    padding: 40px 20px;
+.control-edit-input:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+}
+
+.control-edit-input-small {
+    flex: 0 0 60px;
+}
+
+.control-edit-actions {
+    display: flex;
+    gap: 4px;
+    margin-top: 8px;
+    justify-content: flex-end;
 }
 
 /* Properties Form */

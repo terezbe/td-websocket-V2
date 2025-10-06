@@ -78,11 +78,49 @@ def sanitizeName(name):
     return sanitized if sanitized else 'page'
 ```
 
+### Config Storage Architecture (CRITICAL)
+
+**Hybrid Storage + Text DAT System**: Config is stored in **two places** for reliability and visibility:
+
+**PRIMARY: TouchDesigner Storage**
+```python
+parent().storage['ui_config'] = config_dict  # Fast, reliable, no encoding issues
+```
+- Python dictionary attached to parent component
+- Persists in .toe/.tox file when saved
+- No bytes/encoding problems
+- Fast access (no JSON parsing)
+- **This is the source of truth**
+
+**BACKUP: Text DAT**
+```python
+op('ui_config').text = json.dumps(config_dict, indent=2)  # Visible in UI
+```
+- For visual debugging and manual inspection
+- Fallback if storage is empty (old projects)
+- Shows formatted JSON in TouchDesigner UI
+
+**Read Priority** (all endpoints):
+1. Try `parent().storage['ui_config']` first (fast path)
+2. Fallback to Text DAT `op('ui_config').text` (compatibility)
+3. Return empty default if neither exists
+
+**Implementation:**
+- POST `/api/config`: Saves to both storage and Text DAT (lines 438-448)
+- GET `/api/config`: Reads from storage first (lines 375-380)
+- `deployFromConfig()`: Reads from storage first (lines 139-141)
+
+**Why This Matters:**
+- Fixes all config loading issues (bytes, encoding, consistency)
+- Phone and desktop always load same config
+- No localStorage confusion
+- Deployment and viewer use identical data
+
 ### CHOP Deployment Strategy
 
-**Auto-deploy on save**: Builder → "Save to TD" → HTTP POST `/api/config` → saves to `ui_config` Text DAT → HTTP POST `/api/deploy` → creates/updates CHOPs
+**Auto-deploy on save**: Builder → "Save to TD" → HTTP POST `/api/config` → saves to storage + Text DAT → HTTP POST `/api/deploy` → creates/updates CHOPs
 
-**Update vs Create logic** (line 273-280):
+**Update vs Create logic**:
 ```python
 if is_update:
     # Use existing CHOP - just overwrite channels we need
@@ -92,7 +130,7 @@ else:
     new_chop = deploy_location.create(constantCHOP, chop_name)
 ```
 
-**Channel configuration** (line 282-295):
+**Channel configuration**:
 - Sets only channels 0 to N-1 (where N = number of controls)
 - **Does NOT clear unused channels** to avoid creating empty visible rows
 - Old channels from deleted controls remain but are harmless (not referenced by viewer)
@@ -188,10 +226,12 @@ for i in range(target_chop.numChans):
 
 **`public/app.js`**
 - WebSocket client for real-time control
+- **Config loading**: Server only (no localStorage) - line 40-61
 - Renders UI from config: `renderUI()`, `renderPageTabs()`, `renderCurrentPage()`
 - Control rendering: `createControl()` for each type
 - Message sending: `sendMessage()` with `label` field
-- Default config: `getDefaultConfig()` (line 99-161)
+- Empty state: Shows "No controls configured" with link to builder (line 181-204)
+- **Single source of truth**: Always loads from TouchDesigner server
 
 **`public/style.css`**
 - Viewer styling
@@ -265,26 +305,47 @@ deploy_location = me.parent()  # Change to desired location
 
 ## Troubleshooting
 
-### "CHOP '{name}' not found!" error
+### Viewer shows empty UI after saving from builder
 
-**Cause**: Viewer has old config with outdated CHOP names.
+**Cause**: Config not loading from storage properly.
+
+**Check TouchDesigner Textport for:**
+```
+[WebServer] ✓ Saved config to storage (XXX bytes)
+[WebServer] ✓ Loaded config from storage
+```
 
 **Fix**:
-1. Builder → Clear localStorage → Rebuild UI
-2. OR: TouchDesigner → Delete `ui_config` Text DAT → Rebuild config
-3. Save to TD to regenerate CHOPs
+1. Verify Web Server DAT callbacks are set to the script with storage code
+2. Check that Web Server DAT is inside a component (storage needs parent)
+3. Clear browser cache and refresh viewer
+4. If Text DAT has old data, it will be migrated to storage on next save
+
+### "CHOP '{name}' not found!" error
+
+**Cause**: CHOP names in config don't match deployed CHOPs.
+
+**Fix**:
+1. Open builder, click "Save to TD" (this deploys CHOPs)
+2. Refresh viewer
+3. Check textport for deployment success message
+
+### Phone and desktop show different UIs
+
+**Cause**: This should NOT happen with storage architecture.
+
+**Check**:
+1. Both devices loading from same server (`http://localhost:9980` or `http://[computer-ip]:9980`)
+2. Textport shows "Loaded from storage" (not "Text DAT fallback")
+3. No browser errors in console (F12)
+
+**Fix**: Viewer loads from server only (no localStorage). Both devices should be identical.
 
 ### Empty channels appearing after re-deploy
 
-**Cause**: Old deployment code cleared all 40 channels (fixed in recent update).
+**Cause**: Old deployment code cleared all 40 channels (fixed).
 
-**Fix**: Already fixed (line 282-295). Code now only sets channels it needs.
-
-### Channels use wrong names (IDs instead of labels)
-
-**Cause**: Old config created before auto-naming system.
-
-**Fix**: Delete CHOP, save to TD again. New deployment uses sanitized labels.
+**Status**: Already fixed. Code now only sets channels 0 to N-1.
 
 ### Web files not loading
 
@@ -294,6 +355,12 @@ deploy_location = me.parent()  # Change to desired location
 1. Run `load_vfs_files.py` to populate VFS
 2. Set Web Server DAT "VFS" parameter to component path
 3. Restart Web Server DAT (toggle Active off/on)
+
+### Advanced tab stuck on screen
+
+**Cause**: Switching from Advanced to regular page didn't hide Advanced tab.
+
+**Status**: Already fixed (app.js line 201-205). Advanced tab is hidden when switching pages.
 
 ## Message Protocol Reference
 
@@ -356,9 +423,32 @@ Original design used WebSocket DAT + external Node.js server. **Current architec
 - VFS support embeds web files in .tox
 - Simpler setup (no external server)
 
+### Why Hybrid Storage + Text DAT
+
+**Storage Advantages:**
+- No encoding/bytes issues (stores Python dicts directly)
+- Fast (no JSON parsing)
+- Reliable (survives .toe save)
+- **Solves the config loading problem**
+
+**Text DAT Advantages:**
+- Visible in UI (can see config data)
+- Manual editing possible
+- Backwards compatible with old projects
+
+**Best of both worlds**: Storage for reliability, Text DAT for visibility.
+
 ### Why VFS (Virtual File System)
 
 Web files (`public/*.html`, `public/*.js`, `public/*.css`) are embedded in the TouchDesigner component using virtualFile operators. This allows distributing the component as a single .tox file without external dependencies.
+
+### Why Viewer Has No localStorage
+
+**Before**: Viewer used localStorage fallback → inconsistent between devices
+
+**Now**: Viewer loads from server only → always consistent
+
+**Benefit**: Phone and desktop always show identical UI. Single source of truth.
 
 ### Channel Parameters vs Channel Values
 
