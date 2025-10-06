@@ -37,6 +37,19 @@ function getCurrentControls() {
     return page ? page.controls : [];
 }
 
+function sanitizeName(name) {
+    // Sanitize page name for use as CHOP name (matches Python implementation)
+    // Remove special characters, replace with underscore
+    let sanitized = name.replace(/[^a-zA-Z0-9_]/g, '_');
+    // Remove consecutive underscores
+    sanitized = sanitized.replace(/_+/g, '_');
+    // Remove leading/trailing underscores
+    sanitized = sanitized.replace(/^_+|_+$/g, '');
+    // Lowercase
+    sanitized = sanitized.toLowerCase();
+    return sanitized || 'page';
+}
+
 function migrateOldConfig(config) {
     // If config has 'controls' property (old format), migrate to pages format
     if (config.controls && !config.pages) {
@@ -124,12 +137,17 @@ function addControl(type) {
 function createDefaultControl(type) {
     const id = `${type}${state.nextId}`;
 
+    // Auto-populate CHOP name based on current page
+    const currentPage = getCurrentPage();
+    const pageName = currentPage ? currentPage.name : 'main';
+    const chopName = `${sanitizeName(pageName)}_controls`;
+
     const defaults = {
         slider: {
             id,
             type: 'slider',
             label: `Slider ${state.nextId}`,
-            chop: 'constant_params',
+            chop: chopName,
             channel: 0,
             min: 0,
             max: 100,
@@ -139,15 +157,22 @@ function createDefaultControl(type) {
             id,
             type: 'color',
             label: `Color ${state.nextId}`,
-            chop: 'constant_color',
+            chop: chopName,
             default: '#ff0000'
         },
         xy: {
             id,
             type: 'xy',
             label: `XY Pad ${state.nextId}`,
-            chop: 'constant_xy',
+            chop: chopName,
             default: { x: 0.5, y: 0.5 }
+        },
+        button: {
+            id,
+            type: 'button',
+            label: `Button ${state.nextId}`,
+            chop: chopName,
+            default: 0  // 0 = off, 1 = on
         }
     };
 
@@ -230,7 +255,8 @@ function createControlListItem(control, index) {
     const typeIcons = {
         slider: '<line x1="4" y1="12" x2="20" y2="12"/><circle cx="12" cy="12" r="3" fill="currentColor"/>',
         color: '<circle cx="12" cy="12" r="10"/><path d="M12 2 L12 12 L20 12"/>',
-        xy: '<rect x="4" y="4" width="16" height="16" rx="2"/><circle cx="12" cy="12" r="2" fill="currentColor"/>'
+        xy: '<rect x="4" y="4" width="16" height="16" rx="2"/><circle cx="12" cy="12" r="2" fill="currentColor"/>',
+        button: '<rect x="6" y="8" width="12" height="8" rx="2" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="white"/>'
     };
 
     const metaText = control.type === 'slider'
@@ -367,6 +393,14 @@ function createPreviewElement(control) {
                 <div class="preview-xy-cursor" style="left: ${x}%; top: ${y}%;"></div>
             </div>
         `;
+    } else if (control.type === 'button') {
+        const isActive = control.default === 1;
+        group.innerHTML = `
+            <label>${control.label}</label>
+            <button class="preview-button ${isActive ? 'active' : ''}" disabled>
+                ${isActive ? 'ON' : 'OFF'}
+            </button>
+        `;
     }
 
     return group;
@@ -410,10 +444,6 @@ function createPropertiesForm(control) {
             <label class="prop-label">Label</label>
             <input type="text" class="prop-input" id="prop-label" value="${control.label}" placeholder="Control label">
         </div>
-        <div class="prop-group">
-            <label class="prop-label">CHOP Name</label>
-            <input type="text" class="prop-input" id="prop-chop" value="${control.chop}" placeholder="constant_params">
-        </div>
     `;
 
     if (control.type === 'slider') {
@@ -453,6 +483,16 @@ function createPropertiesForm(control) {
             <input type="number" class="prop-input" id="prop-default-y" value="${control.default.y}" min="0" max="1" step="0.01">
         </div>
         `;
+    } else if (control.type === 'button') {
+        formHTML += `
+        <div class="prop-group">
+            <label class="prop-label">Default State</label>
+            <select class="prop-input" id="prop-default-state">
+                <option value="0" ${control.default === 0 ? 'selected' : ''}>OFF (0)</option>
+                <option value="1" ${control.default === 1 ? 'selected' : ''}>ON (1)</option>
+            </select>
+        </div>
+        `;
     }
 
     formHTML += `
@@ -471,7 +511,6 @@ function saveProperties(id) {
 
     // Get form values
     control.label = document.getElementById('prop-label').value;
-    control.chop = document.getElementById('prop-chop').value;
 
     if (control.type === 'slider') {
         control.channel = parseInt(document.getElementById('prop-channel').value);
@@ -483,6 +522,8 @@ function saveProperties(id) {
     } else if (control.type === 'xy') {
         control.default.x = parseFloat(document.getElementById('prop-default-x').value);
         control.default.y = parseFloat(document.getElementById('prop-default-y').value);
+    } else if (control.type === 'button') {
+        control.default = parseInt(document.getElementById('prop-default-state').value);
     }
 
     saveToLocalStorage();
@@ -716,6 +757,7 @@ function deletePage(pageId) {
 
 async function saveToServer() {
     try {
+        // Step 1: Save config to TouchDesigner
         const response = await fetch('/api/config', {
             method: 'POST',
             headers: {
@@ -724,18 +766,81 @@ async function saveToServer() {
             body: JSON.stringify(state.config)
         });
 
-        if (response.ok) {
-            const result = await response.json();
-            alert('✓ Configuration saved to TouchDesigner!\n\nThe UI config is now stored in the ui_config Text DAT.');
-            console.log('[Builder] Saved to TouchDesigner:', result);
-        } else {
+        if (!response.ok) {
             const error = await response.json();
             alert(`✗ Failed to save to TouchDesigner:\n${error.error || 'Unknown error'}`);
             console.error('[Builder] Save error:', error);
+            return;
         }
+
+        const result = await response.json();
+        console.log('[Builder] Saved to TouchDesigner:', result);
+
+        // Step 2: Auto-deploy CHOPs
+        console.log('[Builder] Deploying CHOPs...');
+        const deployResponse = await fetch('/api/deploy', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
+
+        if (deployResponse.ok) {
+            const deployResult = await deployResponse.json();
+            console.log('[Builder] Deploy result:', deployResult);
+
+            // Build success message
+            let message = '✓ Configuration saved to TouchDesigner!\n\n';
+
+            if (deployResult.success) {
+                if (deployResult.chops.length > 0) {
+                    // Count created vs updated
+                    const created = deployResult.chops.filter(c => c.action === 'Created');
+                    const updated = deployResult.chops.filter(c => c.action === 'Updated');
+
+                    message += '✓ Deployment Results:\n';
+
+                    if (created.length > 0) {
+                        message += `\n  Created ${created.length} CHOP(s):\n`;
+                        created.forEach(chop => {
+                            message += `    • ${chop.name} (${chop.channels} channels)\n`;
+                        });
+                    }
+
+                    if (updated.length > 0) {
+                        message += `\n  Updated ${updated.length} CHOP(s):\n`;
+                        updated.forEach(chop => {
+                            message += `    • ${chop.name} (${chop.channels} channels)\n`;
+                        });
+                    }
+                } else {
+                    message += '✓ No CHOPs to deploy (pages have no controls)';
+                }
+
+                if (deployResult.warnings.length > 0) {
+                    message += '\n⚠ Warnings:\n';
+                    deployResult.warnings.forEach(warn => {
+                        message += `  • ${warn}\n`;
+                    });
+                }
+            } else {
+                message += '✗ Deployment failed:\n';
+                deployResult.errors.forEach(err => {
+                    message += `  • ${err}\n`;
+                });
+            }
+
+            alert(message);
+        } else {
+            // Deploy failed
+            const deployError = await deployResponse.json();
+            console.error('[Builder] Deploy error:', deployError);
+            alert(`✓ Configuration saved to TouchDesigner!\n\n✗ But deployment failed:\n${deployError.error || 'Unknown error'}\n\nYou may need to deploy manually.`);
+        }
+
     } catch (e) {
         console.error('[Builder] Server unavailable:', e);
-        alert('✗ TouchDesigner server not available.\n\nMake sure:\n1. Web Server DAT is Active\n2. Callbacks are set up\n3. ui_config Text DAT exists\n\nYour config is still saved in browser LocalStorage.');
+        alert('✗ TouchDesigner server not available.\n\nMake sure:\n1. Web Server DAT is Active\n2. Callbacks are set up\n3. ui_config Text DAT exists\n4. deploy_chops Text DAT exists\n\nYour config is still saved in browser LocalStorage.');
     }
 }
 

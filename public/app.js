@@ -38,44 +38,26 @@ document.addEventListener('DOMContentLoaded', async () => {
 // ============================================================================
 
 async function loadConfig() {
-    // Try loading from TouchDesigner server first
+    // Load from TouchDesigner server (single source of truth)
     try {
-        console.log('[Viewer] Attempting to load config from TouchDesigner...');
+        console.log('[Viewer] Loading config from TouchDesigner server...');
         const response = await fetch('/api/config');
 
         if (response.ok) {
             const loaded = await response.json();
             uiConfig = migrateOldConfig(loaded);
             currentPageId = uiConfig.pages[0].id;
-            console.log('[Viewer] ✓ Loaded config from TouchDesigner server');
+            console.log('[Viewer] ✓ Config loaded from server');
             return;
-        } else {
-            console.log('[Viewer] Server responded but no config found, trying localStorage...');
         }
     } catch (e) {
-        console.log('[Viewer] TouchDesigner server unavailable, using localStorage...');
+        console.error('[Viewer] Failed to connect to server:', e);
     }
 
-    // Fallback to localStorage
-    try {
-        const saved = localStorage.getItem('td_ui_config');
-        if (saved) {
-            const loaded = JSON.parse(saved);
-            uiConfig = migrateOldConfig(loaded);
-            currentPageId = uiConfig.pages[0].id;
-            console.log('[Viewer] ✓ Loaded config from browser LocalStorage');
-        } else {
-            // Use default config if none exists
-            uiConfig = getDefaultConfig();
-            currentPageId = uiConfig.pages[0].id;
-            console.log('[Viewer] No config found, using default config');
-        }
-    } catch (e) {
-        console.error('[Viewer] Failed to load config:', e);
-        uiConfig = getDefaultConfig();
-        currentPageId = uiConfig.pages[0].id;
-        console.log('[Viewer] Error loading config, using default config');
-    }
+    // Server unavailable or error - use empty default
+    uiConfig = getDefaultConfig();
+    currentPageId = uiConfig.pages[0].id;
+    console.log('[Viewer] Server unavailable - showing empty UI. Use Builder to create controls.');
 }
 
 function migrateOldConfig(config) {
@@ -102,59 +84,8 @@ function getDefaultConfig() {
         pages: [
             {
                 id: "page1",
-                name: "Controls",
-                controls: [
-                    {
-                        id: "slider1",
-                        type: "slider",
-                        label: "Parameter 1",
-                        chop: "constant_params",
-                        channel: 0,
-                        min: 0,
-                        max: 100,
-                        default: 50
-                    },
-                    {
-                        id: "slider2",
-                        type: "slider",
-                        label: "Parameter 2",
-                        chop: "constant_params",
-                        channel: 1,
-                        min: 0,
-                        max: 100,
-                        default: 50
-                    },
-                    {
-                        id: "slider3",
-                        type: "slider",
-                        label: "Parameter 3",
-                        chop: "constant_params",
-                        channel: 2,
-                        min: 0,
-                        max: 100,
-                        default: 50
-                    },
-                    {
-                        id: "color1",
-                        type: "color",
-                        label: "Color",
-                        chop: "constant_color",
-                        default: "#ff0000"
-                    }
-                ]
-            },
-            {
-                id: "page2",
-                name: "XY Pad",
-                controls: [
-                    {
-                        id: "xy1",
-                        type: "xy",
-                        label: "XY Position",
-                        chop: "constant_xy",
-                        default: { x: 0.5, y: 0.5 }
-                    }
-                ]
+                name: "Default",
+                controls: []  // Empty - use builder to create controls and save to TouchDesigner
             }
         ]
     };
@@ -197,6 +128,13 @@ function renderPageTabs() {
 
 function switchToPage(pageId) {
     currentPageId = pageId;
+
+    // Hide advanced tab (if it was showing)
+    const advancedTab = document.getElementById('tab-advanced');
+    if (advancedTab) {
+        advancedTab.classList.remove('active');
+    }
+
     renderCurrentPage();
 
     // Update tab buttons
@@ -239,11 +177,39 @@ function renderCurrentPage() {
     const scrollable = document.createElement('div');
     scrollable.className = 'scrollable-content';
 
-    // Render controls
-    page.controls.forEach(control => {
-        const element = createControlElement(control);
-        scrollable.appendChild(element);
-    });
+    // Show helpful message if no controls configured
+    if (page.controls.length === 0) {
+        const emptyState = document.createElement('div');
+        emptyState.style.cssText = 'text-align: center; padding: 60px 20px; color: #888;';
+        emptyState.innerHTML = `
+            <div style="font-size: 48px; margin-bottom: 20px; opacity: 0.3;">📱</div>
+            <p style="font-size: 20px; margin-bottom: 15px; color: #aaa;">No controls configured</p>
+            <p style="font-size: 14px; line-height: 1.6; margin-bottom: 25px;">
+                Use the <strong>Builder</strong> to create your custom UI<br>
+                and save it to TouchDesigner
+            </p>
+            <a href="/builder.html" style="
+                display: inline-block;
+                padding: 12px 24px;
+                background: #4CAF50;
+                color: white;
+                text-decoration: none;
+                border-radius: 4px;
+                font-weight: 500;
+                transition: background 0.2s;
+            " onmouseover="this.style.background='#45a049'"
+               onmouseout="this.style.background='#4CAF50'">
+                Open Builder →
+            </a>
+        `;
+        scrollable.appendChild(emptyState);
+    } else {
+        // Render controls
+        page.controls.forEach(control => {
+            const element = createControlElement(control);
+            scrollable.appendChild(element);
+        });
+    }
 
     content.appendChild(scrollable);
     wrapper.insertBefore(content, document.getElementById('tab-advanced'));
@@ -276,6 +242,7 @@ function createControlElement(control) {
             sendMessage({
                 type: 'parameter',
                 id: control.id,
+                label: control.label,
                 value: parseFloat(slider.value),
                 chop: control.chop,
                 channel: control.channel
@@ -301,6 +268,7 @@ function createControlElement(control) {
             sendMessage({
                 type: 'color',
                 id: control.id,
+                label: control.label,
                 hex: e.target.value,
                 rgb: rgb,
                 chop: control.chop
@@ -347,6 +315,44 @@ function createControlElement(control) {
 
         // Setup XY pad interaction
         setTimeout(() => setupXYPadForControl(control), 0);
+
+    } else if (control.type === 'button') {
+        const label = document.createElement('label');
+        label.textContent = control.label;
+
+        const button = document.createElement('button');
+        button.id = control.id;
+        button.className = 'control-button';
+        button.dataset.state = control.default || 0;
+
+        // Set initial appearance
+        if (parseInt(button.dataset.state) === 1) {
+            button.classList.add('active');
+            button.textContent = 'ON';
+        } else {
+            button.textContent = 'OFF';
+        }
+
+        // Toggle on click
+        button.addEventListener('click', () => {
+            const currentState = parseInt(button.dataset.state);
+            const newState = currentState === 1 ? 0 : 1;
+
+            button.dataset.state = newState;
+            button.classList.toggle('active', newState === 1);
+            button.textContent = newState === 1 ? 'ON' : 'OFF';
+
+            sendMessage({
+                type: 'button',
+                id: control.id,
+                label: control.label,
+                state: newState,
+                chop: control.chop
+            });
+        });
+
+        group.appendChild(label);
+        group.appendChild(button);
     }
 
     return group;
@@ -433,6 +439,7 @@ function setupXYPadForControl(control) {
         sendMessage({
             type: 'xy',
             id: ctrl.id,
+            label: ctrl.label,
             x: x,
             y: y,
             chop: ctrl.chop

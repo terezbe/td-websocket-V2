@@ -28,16 +28,20 @@ That's it! One Web Server DAT does everything - HTTP + WebSocket on port 9980.
 API ENDPOINTS:
 - GET  /api/config - Load UI config from ui_config Text DAT
 - POST /api/config - Save UI config to ui_config Text DAT
+- POST /api/deploy - Deploy CHOPs from UI config
 
 WEBSOCKET MESSAGES:
 - parameter: Updates slider values (dynamic CHOP routing)
 - color: Updates RGB color values
 - xy: Updates XY pad position
-- trigger: Triggers a pulse
+- button: Updates button state (0 = OFF, 1 = ON)
 - reset: Resets all values to defaults
 """
 
 import json
+import sys
+import os
+import re
 
 # ============================================================================
 # CONFIGURATION
@@ -74,6 +78,281 @@ def getMimeType(filename):
 	else:
 		return 'application/octet-stream'
 
+
+def sanitizeName(name):
+	"""Sanitize page name for use as CHOP name."""
+	# Remove special characters, replace spaces with underscore
+	sanitized = re.sub(r'[^a-zA-Z0-9_]', '_', name)
+	# Remove consecutive underscores
+	sanitized = re.sub(r'_+', '_', sanitized)
+	# Remove leading/trailing underscores
+	sanitized = sanitized.strip('_')
+	# Lowercase
+	sanitized = sanitized.lower()
+	return sanitized if sanitized else 'page'
+
+
+def hexToRGB(hex_color):
+	"""Convert hex color to normalized RGB (0-1)."""
+	hex_color = hex_color.lstrip('#')
+
+	try:
+		r = int(hex_color[0:2], 16) / 255.0
+		g = int(hex_color[2:4], 16) / 255.0
+		b = int(hex_color[4:6], 16) / 255.0
+		return (r, g, b)
+	except:
+		return (1.0, 0.0, 0.0)  # Default red
+
+
+def deployFromConfig():
+	"""
+	Deploy CHOPs from ui_config Text DAT.
+
+	Automatically creates/updates Constant CHOPs based on UI configuration.
+	- Creates one Constant CHOP per page
+	- Handles: sliders, colors, XY pads, buttons
+	- Names: {page_name}_controls (sanitized)
+	- Channels: Uses control IDs
+	- Location: Inside component (same level as webserver node)
+	- Updates: Re-deploys update existing CHOPs instead of erroring
+
+	Returns dict with deployment results.
+	"""
+
+	print("=" * 70)
+	print("[Deploy CHOPs] Starting deployment...")
+	print("=" * 70)
+
+	results = {
+		'success': False,
+		'chops': [],
+		'errors': [],
+		'warnings': []
+	}
+
+	# ========================================================================
+	# Step 1: Read and parse config
+	# ========================================================================
+
+	# PRIMARY: Try storage first (fast, reliable)
+	if 'ui_config' in parent().storage:
+		config = parent().storage['ui_config']
+		print(f"[Deploy] ✓ Loaded config from storage")
+
+	# FALLBACK: Try Text DAT (for old projects or manual edits)
+	else:
+		config_dat = op('ui_config')
+
+		if config_dat is None:
+			error = "ui_config not found (no storage or Text DAT)"
+			print(f"[ERROR] {error}")
+			results['errors'].append(error)
+			return results
+
+		config_text = config_dat.text
+
+		if not config_text:
+			error = "ui_config is empty - save a configuration first"
+			print(f"[ERROR] {error}")
+			results['errors'].append(error)
+			return results
+
+		# Handle bytes or string representation of bytes
+		if isinstance(config_text, bytes):
+			config_text = config_text.decode('utf-8')
+
+		if config_text.startswith("b'") or config_text.startswith('b"'):
+			config_text = config_text[2:-1]
+			config_text = config_text.encode().decode('unicode_escape')
+
+		try:
+			config = json.loads(config_text)
+			print(f"[Deploy] ✓ Loaded config from Text DAT (fallback)")
+		except json.JSONDecodeError as e:
+			error = f"Invalid JSON in ui_config: {e}"
+			print(f"[ERROR] {error}")
+			results['errors'].append(error)
+			return results
+
+	pages = config.get('pages', [])
+
+	if not pages:
+		warning = "No pages found in config"
+		print(f"[WARNING] {warning}")
+		results['warnings'].append(warning)
+		results['success'] = True
+		return results
+
+	print(f"[OK] Found {len(pages)} page(s) in config")
+
+	# ========================================================================
+	# Step 2: Get deployment location (inside component)
+	# ========================================================================
+	# Assuming this script is called from webserver callback
+	# me.parent() = inside the component, same level as webserver
+	try:
+		deploy_location = me.parent()
+		print(f"[OK] Deploy location: {deploy_location.path}")
+	except:
+		# Fallback if called from elsewhere
+		deploy_location = parent()
+		print(f"[OK] Deploy location (fallback): {deploy_location.path}")
+
+	# ========================================================================
+	# Step 3: Deploy CHOP for each page
+	# ========================================================================
+	for page_idx, page in enumerate(pages):
+		page_name = page.get('name', f'Page {page_idx + 1}')
+		page_id = page.get('id', f'page{page_idx + 1}')
+		controls = page.get('controls', [])
+
+		print("-" * 70)
+		print(f"[Page {page_idx + 1}] Processing '{page_name}' ({len(controls)} controls)")
+
+		if not controls:
+			warning = f"Page '{page_name}' has no controls - skipping"
+			print(f"[WARNING] {warning}")
+			results['warnings'].append(warning)
+			continue
+
+		# Generate CHOP name from page name
+		chop_name = f"{sanitizeName(page_name)}_controls"
+		print(f"[INFO] CHOP name: '{chop_name}'")
+
+		# Check if CHOP already exists
+		existing_chop = deploy_location.op(chop_name)
+		is_update = existing_chop is not None
+
+		if is_update:
+			print(f"[INFO] CHOP '{chop_name}' exists - will update")
+		else:
+			print(f"[INFO] CHOP '{chop_name}' does not exist - will create")
+
+		# Analyze controls and build channel list
+		channels = []
+
+		for control in controls:
+			control_type = control.get('type')
+			control_id = control.get('id', 'unknown')
+			control_label = control.get('label', control_id)
+
+			# Use sanitized label for channel names (human-readable)
+			sanitized_label = sanitizeName(control_label)
+
+			if control_type == 'slider':
+				# Slider = 1 channel
+				channels.append({
+					'name': sanitized_label,
+					'value': control.get('default', 50),
+					'type': 'slider'
+				})
+
+			elif control_type == 'color':
+				# Color = 3 channels (r, g, b)
+				default_hex = control.get('default', '#ff0000')
+				# Convert hex to RGB (0-1)
+				r, g, b = hexToRGB(default_hex)
+				channels.append({'name': f"{sanitized_label}_r", 'value': r, 'type': 'color'})
+				channels.append({'name': f"{sanitized_label}_g", 'value': g, 'type': 'color'})
+				channels.append({'name': f"{sanitized_label}_b", 'value': b, 'type': 'color'})
+
+			elif control_type == 'xy':
+				# XY = 2 channels (x, y)
+				default_xy = control.get('default', {'x': 0.5, 'y': 0.5})
+				channels.append({'name': f"{sanitized_label}_x", 'value': default_xy.get('x', 0.5), 'type': 'xy'})
+				channels.append({'name': f"{sanitized_label}_y", 'value': default_xy.get('y', 0.5), 'type': 'xy'})
+
+			elif control_type == 'button':
+				# Button = 1 channel (0 or 1)
+				channels.append({
+					'name': f"{sanitized_label}_state",
+					'value': control.get('default', 0),
+					'type': 'button'
+				})
+
+		if not channels:
+			warning = f"Page '{page_name}' has no deployable controls"
+			print(f"[WARNING] {warning}")
+			results['warnings'].append(warning)
+			continue
+
+		# Create or update the CHOP
+		try:
+			if is_update:
+				# Use existing CHOP - just overwrite the channels we need
+				new_chop = existing_chop
+				print(f"[INFO] Updating CHOP with {len(channels)} channels")
+			else:
+				# Create new CHOP
+				new_chop = deploy_location.create(constantCHOP, chop_name)
+				print(f"[INFO] Creating CHOP with {len(channels)} channels")
+
+			# Configure channels (set the ones we need, leave the rest alone)
+			for i, channel in enumerate(channels):
+				name_param = f'const{i}name'
+				value_param = f'const{i}value'
+
+				if hasattr(new_chop.par, name_param):
+					setattr(new_chop.par, name_param, channel['name'])
+					setattr(new_chop.par, value_param, channel['value'])
+					print(f"  [{i}] {channel['name']} = {channel['value']} ({channel['type']})")
+				else:
+					warning = f"Channel {i} exceeded CHOP capacity"
+					print(f"[WARNING] {warning}")
+					results['warnings'].append(warning)
+					break
+
+			# Position CHOP (only for new CHOPs)
+			if not is_update:
+				new_chop.nodeX = page_idx * 200
+				new_chop.nodeY = -200
+				new_chop.viewer = True
+
+			# Success message
+			action = "Updated" if is_update else "Created"
+			success_msg = f"{action} '{chop_name}' with {len(channels)} channels"
+			print(f"[SUCCESS] {success_msg}")
+
+			results['chops'].append({
+				'name': chop_name,
+				'path': new_chop.path,
+				'channels': len(channels),
+				'page': page_name,
+				'action': action
+			})
+
+		except Exception as e:
+			action = "update" if is_update else "create"
+			error = f"Failed to {action} CHOP '{chop_name}': {e}"
+			print(f"[ERROR] {error}")
+			results['errors'].append(error)
+
+	# ========================================================================
+	# Step 4: Summary
+	# ========================================================================
+	print("=" * 70)
+	print(f"[Deploy CHOPs] Deployment complete!")
+
+	# Count created vs updated
+	created = [c for c in results['chops'] if c.get('action') == 'Created']
+	updated = [c for c in results['chops'] if c.get('action') == 'Updated']
+
+	if created:
+		print(f"[Deploy CHOPs] Created: {len(created)} CHOP(s)")
+	if updated:
+		print(f"[Deploy CHOPs] Updated: {len(updated)} CHOP(s)")
+	if not created and not updated:
+		print(f"[Deploy CHOPs] No CHOPs processed")
+
+	print(f"[Deploy CHOPs] Errors: {len(results['errors'])}")
+	print(f"[Deploy CHOPs] Warnings: {len(results['warnings'])}")
+	print("=" * 70)
+
+	results['success'] = len(results['errors']) == 0
+
+	return results
+
 # ============================================================================
 # HTTP CALLBACKS (API + File Serving)
 # ============================================================================
@@ -101,21 +380,20 @@ def onHTTPRequest(webServerDAT, request, response):
 	# ========================================================================
 	if uri == '/api/config' and method == 'GET':
 		try:
-			config_dat = op('ui_config')
-
-			if config_dat is None:
-				print("[WebServer] Warning: ui_config DAT not found - using empty config")
+			# PRIMARY: Try storage first (fast, reliable)
+			if 'ui_config' in parent().storage:
+				config = parent().storage['ui_config']
 				response['statusCode'] = 200
 				response['statusReason'] = 'OK'
-				response['data'] = json.dumps({
-					"version": "1.0",
-					"pages": [{"id": "page1", "name": "Default", "controls": []}]
-				})
-			else:
+				response['data'] = json.dumps(config)
+				print(f"[WebServer] ✓ Loaded config from storage")
+
+			# FALLBACK: Try Text DAT (for old projects or manual edits)
+			elif (config_dat := op('ui_config')) is not None:
 				config_text = config_dat.text
 
 				if not config_text or config_text.strip() == '':
-					print("[WebServer] ui_config is empty - using default config")
+					print("[WebServer] ui_config is empty - using default")
 					response['statusCode'] = 200
 					response['statusReason'] = 'OK'
 					response['data'] = json.dumps({
@@ -123,17 +401,35 @@ def onHTTPRequest(webServerDAT, request, response):
 						"pages": [{"id": "page1", "name": "Default", "controls": []}]
 					})
 				else:
+					# Handle bytes format (if needed)
+					if isinstance(config_text, bytes):
+						config_text = config_text.decode('utf-8')
+
+					if config_text.startswith("b'") or config_text.startswith('b"'):
+						config_text = config_text[2:-1]
+						config_text = config_text.encode().decode('unicode_escape')
+
 					try:
-						json.loads(config_text)  # Validate JSON
+						json.loads(config_text)  # Validate
 						response['statusCode'] = 200
 						response['statusReason'] = 'OK'
 						response['data'] = config_text
-						print(f"[WebServer] Loaded config from ui_config ({len(config_text)} bytes)")
+						print(f"[WebServer] ✓ Loaded config from Text DAT (fallback)")
 					except json.JSONDecodeError:
-						print("[WebServer] Error: ui_config contains invalid JSON")
+						print("[WebServer] Error: Text DAT contains invalid JSON")
 						response['statusCode'] = 500
 						response['statusReason'] = 'Internal Server Error'
-						response['data'] = json.dumps({"error": "Invalid JSON in ui_config"})
+						response['data'] = json.dumps({"error": "Invalid JSON in Text DAT"})
+
+			# EMPTY: No storage, no Text DAT
+			else:
+				print("[WebServer] No config found - using empty default")
+				response['statusCode'] = 200
+				response['statusReason'] = 'OK'
+				response['data'] = json.dumps({
+					"version": "1.0",
+					"pages": [{"id": "page1", "name": "Default", "controls": []}]
+				})
 
 			response['content-type'] = 'application/json'
 			return response
@@ -151,31 +447,33 @@ def onHTTPRequest(webServerDAT, request, response):
 	# ========================================================================
 	elif uri == '/api/config' and method == 'POST':
 		try:
-			config_dat = op('ui_config')
+			config_json = request.get('data', '')
 
-			if config_dat is None:
-				print("[WebServer] Error: ui_config DAT not found")
-				response['statusCode'] = 404
-				response['statusReason'] = 'Not Found'
-				response['data'] = json.dumps({"error": "ui_config DAT not found"})
-			else:
-				config_json = request.get('data', '')
+			try:
+				# Parse and validate JSON
+				config_dict = json.loads(config_json)
 
-				try:
-					json.loads(config_json)  # Validate JSON
+				# PRIMARY: Save to storage (fast, reliable, no encoding issues)
+				parent().storage['ui_config'] = config_dict
+				print(f"[WebServer] ✓ Saved config to storage ({len(config_json)} bytes)")
 
-					config_dat.text = config_json
+				# BACKUP: Save to Text DAT (visible in UI)
+				config_dat = op('ui_config')
+				if config_dat is not None:
+					config_dat.text = json.dumps(config_dict, indent=2)
+					print(f"[WebServer] ✓ Saved config to Text DAT (backup)")
+				else:
+					print(f"[WebServer] ⚠ ui_config DAT not found, storage-only mode")
 
-					response['statusCode'] = 200
-					response['statusReason'] = 'OK'
-					response['data'] = json.dumps({"success": True, "message": "Config saved to TouchDesigner"})
-					print(f"[WebServer] Saved config to ui_config ({len(config_json)} bytes)")
+				response['statusCode'] = 200
+				response['statusReason'] = 'OK'
+				response['data'] = json.dumps({"success": True, "message": "Config saved"})
 
-				except json.JSONDecodeError as e:
-					print(f"[WebServer] Error: Invalid JSON in POST data - {e}")
-					response['statusCode'] = 400
-					response['statusReason'] = 'Bad Request'
-					response['data'] = json.dumps({"error": "Invalid JSON format", "details": str(e)})
+			except json.JSONDecodeError as e:
+				print(f"[WebServer] Error: Invalid JSON - {e}")
+				response['statusCode'] = 400
+				response['statusReason'] = 'Bad Request'
+				response['data'] = json.dumps({"error": "Invalid JSON", "details": str(e)})
 
 			response['content-type'] = 'application/json'
 			return response
@@ -185,6 +483,31 @@ def onHTTPRequest(webServerDAT, request, response):
 			response['statusCode'] = 500
 			response['statusReason'] = 'Internal Server Error'
 			response['data'] = json.dumps({"error": str(e)})
+			response['content-type'] = 'application/json'
+			return response
+
+	# ========================================================================
+	# API: POST /api/deploy - Deploy CHOPs from UI configuration
+	# ========================================================================
+	elif uri == '/api/deploy' and method == 'POST':
+		try:
+			# Call the deployFromConfig function directly (merged into this file)
+			results = deployFromConfig()
+
+			# Return results
+			response['statusCode'] = 200 if results['success'] else 500
+			response['statusReason'] = 'OK' if results['success'] else 'Internal Server Error'
+			response['data'] = json.dumps(results)
+			print(f"[WebServer] Deploy complete: {len(results['chops'])} CHOP(s) processed, {len(results['errors'])} error(s)")
+
+			response['content-type'] = 'application/json'
+			return response
+
+		except Exception as e:
+			print(f"[WebServer] Error in POST /api/deploy: {e}")
+			response['statusCode'] = 500
+			response['statusReason'] = 'Internal Server Error'
+			response['data'] = json.dumps({"error": str(e), "success": False, "chops": [], "errors": [str(e)], "warnings": []})
 			response['content-type'] = 'application/json'
 			return response
 
@@ -335,8 +658,8 @@ def onWebSocketReceiveText(webServerDAT, client, data):
 		elif msgType == 'xy':
 			handleXY(message)
 
-		elif msgType == 'trigger':
-			handleTrigger(message)
+		elif msgType == 'button':
+			handleButton(message)
 
 		elif msgType == 'reset':
 			handleReset(message)
@@ -375,13 +698,15 @@ def handleParameter(data):
 	}
 	"""
 	try:
-		# Check for new format (with chop and channel)
-		if 'chop' in data and 'channel' in data:
-			# New dynamic format
+		# Check for new format (with chop)
+		if 'chop' in data:
+			# New dynamic format - search by sanitized LABEL (not ID)
 			chop_name = data.get('chop', '')
-			channel = data.get('channel', 0)
 			value = data.get('value', 0)
-			control_id = data.get('id', 'unknown')
+			control_label = data.get('label', data.get('id', 'unknown'))
+
+			# Use sanitized label for channel search (matches deployment)
+			sanitized_label = sanitizeName(control_label)
 
 			target_chop = op(chop_name)
 
@@ -389,13 +714,17 @@ def handleParameter(data):
 				print(f"[WebSocket] Error: CHOP '{chop_name}' not found!")
 				return
 
-			param_name = f'value{channel}'
+			# Search for channel by sanitized label
+			found = False
+			for i in range(target_chop.numChans):
+				if target_chop.par[f'const{i}name'].eval() == sanitized_label:
+					target_chop.par[f'const{i}value'] = value
+					found = True
+					print(f"[WebSocket] Set {chop_name}.{sanitized_label} = {value}")
+					break
 
-			if hasattr(target_chop.par, param_name):
-				setattr(target_chop.par, param_name, value)
-				print(f"[WebSocket] Set {chop_name}.{param_name} = {value} (id: {control_id})")
-			else:
-				print(f"[WebSocket] Error: Parameter '{param_name}' not found in {chop_name}")
+			if not found:
+				print(f"[WebSocket] Warning: Channel '{sanitized_label}' not found in {chop_name}")
 
 		else:
 			# Legacy format support (old hardcoded slider1/2/3)
@@ -450,9 +779,12 @@ def handleColor(data):
 		b = rgb.get('b', 0)
 
 		if 'chop' in data:
-			# New dynamic format
+			# New dynamic format - search by sanitized LABEL (not ID)
 			chop_name = data.get('chop', 'constant_color')
-			control_id = data.get('id', 'unknown')
+			control_label = data.get('label', data.get('id', 'unknown'))
+
+			# Use sanitized label for channel search (matches deployment)
+			sanitized_label = sanitizeName(control_label)
 
 			colorChop = op(chop_name)
 
@@ -460,11 +792,24 @@ def handleColor(data):
 				print(f"[WebSocket] Error: CHOP '{chop_name}' not found!")
 				return
 
-			colorChop.par.value0 = r
-			colorChop.par.value1 = g
-			colorChop.par.value2 = b
+			# Search for channels by sanitized label: {label}_r, {label}_g, {label}_b
+			channel_names = {
+				f'{sanitized_label}_r': r,
+				f'{sanitized_label}_g': g,
+				f'{sanitized_label}_b': b
+			}
 
-			print(f"[WebSocket] Set {chop_name} to R:{r:.2f} G:{g:.2f} B:{b:.2f} (id: {control_id})")
+			found_count = 0
+			for i in range(colorChop.numChans):
+				chan_name = colorChop.par[f'const{i}name'].eval()
+				if chan_name in channel_names:
+					colorChop.par[f'const{i}value'] = channel_names[chan_name]
+					found_count += 1
+
+			if found_count == 3:
+				print(f"[WebSocket] Set {chop_name}.{sanitized_label}_[rgb] = R:{r:.2f} G:{g:.2f} B:{b:.2f}")
+			else:
+				print(f"[WebSocket] Warning: Only found {found_count}/3 color channels for '{sanitized_label}' in {chop_name}")
 
 		else:
 			# Legacy format
@@ -509,9 +854,12 @@ def handleXY(data):
 		y = data.get('y', 0.5)
 
 		if 'chop' in data:
-			# New dynamic format
+			# New dynamic format - search by sanitized LABEL (not ID)
 			chop_name = data.get('chop', 'constant_xy')
-			control_id = data.get('id', 'unknown')
+			control_label = data.get('label', data.get('id', 'unknown'))
+
+			# Use sanitized label for channel search (matches deployment)
+			sanitized_label = sanitizeName(control_label)
 
 			xyChop = op(chop_name)
 
@@ -519,10 +867,23 @@ def handleXY(data):
 				print(f"[WebSocket] Error: CHOP '{chop_name}' not found!")
 				return
 
-			xyChop.par.value0 = x
-			xyChop.par.value1 = y
+			# Search for channels by sanitized label: {label}_x, {label}_y
+			channel_names = {
+				f'{sanitized_label}_x': x,
+				f'{sanitized_label}_y': y
+			}
 
-			print(f"[WebSocket] Set {chop_name} to X:{x:.2f} Y:{y:.2f} (id: {control_id})")
+			found_count = 0
+			for i in range(xyChop.numChans):
+				chan_name = xyChop.par[f'const{i}name'].eval()
+				if chan_name in channel_names:
+					xyChop.par[f'const{i}value'] = channel_names[chan_name]
+					found_count += 1
+
+			if found_count == 2:
+				print(f"[WebSocket] Set {chop_name}.{sanitized_label}_[xy] = X:{x:.2f} Y:{y:.2f}")
+			else:
+				print(f"[WebSocket] Warning: Only found {found_count}/2 XY channels for '{sanitized_label}' in {chop_name}")
 
 		else:
 			# Legacy format
@@ -541,34 +902,73 @@ def handleXY(data):
 		print(f"[WebSocket] Error in handleXY: {e}")
 
 
-def handleTrigger(data):
+def handleButton(data):
 	"""
-	Handle trigger button press.
+	Handle button toggle.
 
-	Expected data format:
+	New format:
 	{
-		"type": "trigger",
-		"id": "flash_trigger",
-		"timestamp": 1234567890
+		"type": "button",
+		"id": "main_button",
+		"state": 1,  # 0 = OFF, 1 = ON
+		"chop": "button_states"
+	}
+
+	Legacy format (if needed):
+	{
+		"type": "button",
+		"id": "button1",
+		"state": 1
 	}
 	"""
 	try:
-		trigger_id = data.get('id', 'unknown')
+		control_label = data.get('label', data.get('id', 'unknown'))
+		state = data.get('state', 0)
 
-		# For now, use hardcoded trigger1
-		# TODO: Support dynamic trigger routing
-		triggerChop = op('trigger1')
+		# Use sanitized label for channel search (matches deployment)
+		sanitized_label = sanitizeName(control_label)
 
-		if triggerChop is None:
-			print("[WebSocket] Error: trigger1 CHOP not found!")
-			return
+		if 'chop' in data:
+			# New dynamic format - search by sanitized LABEL
+			chop_name = data.get('chop', 'button_states')
 
-		triggerChop.par.triggerpulse.pulse()
+			buttonChop = op(chop_name)
 
-		print(f"[WebSocket] Triggered: {trigger_id}")
+			if buttonChop is None:
+				print(f"[WebSocket] Error: CHOP '{chop_name}' not found!")
+				return
+
+			# Find the channel for this button
+			# Button channels are named {sanitized_label}_state in deploy script
+			channel_name = f"{sanitized_label}_state"
+
+			# Search for the channel by name
+			found = False
+			for i in range(buttonChop.numChans):
+				if buttonChop.par[f'const{i}name'].eval() == channel_name:
+					buttonChop.par[f'const{i}value'] = state
+					found = True
+					print(f"[WebSocket] Set {chop_name}.{channel_name} = {state}")
+					break
+
+			if not found:
+				print(f"[WebSocket] Warning: Channel '{channel_name}' not found in {chop_name}")
+
+		else:
+			# Legacy format - use hardcoded button CHOP
+			buttonChop = op('button_states')
+
+			if buttonChop is None:
+				print("[WebSocket] Error: button_states CHOP not found!")
+				return
+
+			# Assume first channel for legacy
+			buttonChop.par.value0 = state
+
+			print(f"[WebSocket] Set button state to {state} (legacy format)")
 
 	except Exception as e:
-		print(f"[WebSocket] Error in handleTrigger: {e}")
+		print(f"[WebSocket] Error in handleButton: {e}")
 
 
 def handleReset(data):
